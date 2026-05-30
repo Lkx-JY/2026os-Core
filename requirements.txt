@@ -1,0 +1,13 @@
+pydriller
+GitPython
+sentence-transformers
+faiss-cpu
+pymilvus
+openai
+fastapi
+uvicorn
+pyyaml
+torch
+transformers
+numpy
+pandas
