@@ -8,7 +8,7 @@
 """
 
 import re
-from datatypes import CommitInfo
+from ..models import CommitInfo
 
 
 # 锁相关的关键字

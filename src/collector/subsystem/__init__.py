@@ -5,7 +5,7 @@
 
 import re
 from typing import Dict, List
-from datatypes import CommitInfo
+from ..models import CommitInfo
 
 
 # Linux 内核子系统映射表
@@ -129,6 +129,6 @@ def guess_subsystem_from_content(content: str) -> str:
             scores[subsystem] = score
     
     if scores:
-        return max(scores, key=scores.get)
+        return max(scores, key=lambda k: scores[k])
     
     return "unknown"

@@ -7,6 +7,7 @@ Commit 信息收集和分析模块，提供从 Git 仓库收集 commit 信息并
 ```
 collector/
 ├── __init__.py       # 模块入口，整合所有子模块
+├── models/           # 数据模型定义 (CommitInfo, QueryResult)
 ├── git/              # Git 仓库操作模块
 ├── parser/           # Commit 消息解析模块
 ├── subsystem/        # 子系统识别模块
@@ -15,6 +16,16 @@ collector/
 ```
 
 ## 子模块说明
+
+### models 模块
+
+定义了收集器使用的核心数据结构。
+
+**主要类：**
+- `CommitInfo`: 存储 Commit 的所有分析结果
+- `QueryResult`: 存储查询和根因分析结果
+
+---
 
 ### git 模块
 

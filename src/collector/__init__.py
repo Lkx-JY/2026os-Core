@@ -9,7 +9,7 @@
 """
 
 from typing import List, Optional
-from datatypes import CommitInfo
+from .models import CommitInfo, QueryResult
 
 from .git import (
     get_commit_history,

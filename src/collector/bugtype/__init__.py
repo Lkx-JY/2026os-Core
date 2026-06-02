@@ -5,7 +5,7 @@
 
 import re
 from typing import List, Dict
-from datatypes import CommitInfo
+from ..models import CommitInfo
 
 
 # Bug 类型定义

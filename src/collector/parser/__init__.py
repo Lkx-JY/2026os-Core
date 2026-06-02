@@ -8,7 +8,7 @@
 
 import re
 from typing import List, Tuple
-from datatypes import CommitInfo
+from ..models import CommitInfo
 
 
 def extract_keywords(commit: CommitInfo) -> List[str]:
