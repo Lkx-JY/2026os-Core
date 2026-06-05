@@ -1,266 +1,206 @@
-"""Commit 信息收集器模块
+"""Commit 信息收集器模块 — PyDriller 深度集成版
 
-提供完整的 commit 信息收集和分析功能，整合了以下子模块：
-- git: Git 仓库操作
-- parser: Commit 消息解析
-- subsystem: 子系统识别
-- bugtype: Bug 类型识别
-- analysis: 高级特征分析
-- ★ Root Cause 分析: 对 Commit 也执行与在线侧对称的根因抽象分析
+提供完整的 commit 信息收集和分析功能。支持:
+- 流式收集 (traverse_commits 一次遍历、O(1)内存)
+- 批量收集 (collect_commits)
+- 单点查询 (collect_commit)
+- PyDriller 原生过滤 (按日期/作者/文件/分支)
+
+核心优化: collect_commits 不再做"先收集 hash → 再逐个查询"的二次遍历，
+而是通过 traverse_commits 一次性完成全量数据提取。
 """
 
-from typing import List, Optional, Dict, Any
-from .models import CommitInfo, QueryResult
+from typing import List, Optional, Callable, Generator, Iterator
+from datetime import datetime
 
-from .git import (
-    get_commit_history,
-    get_commit_info,
-    get_commits_since_date,
-    get_commits_by_author,
-    is_git_repo,
-)
-
-from .parser import (
-    extract_keywords,
-    extract_fix_tags,
-    extract_functions,
-    parse_commit_message,
-    is_fix_commit,
-)
-
-from .subsystem import (
-    detect_subsystem,
-    get_subsystem_hierarchy,
-    get_all_subsystems,
-)
-
-from .bugtype import (
-    detect_bug_type,
-    detect_all_bug_types,
-    get_bug_type_description,
-    get_all_bug_types,
-)
-
-from .analysis import (
-    has_lock_added,
-    has_refcount_fix,
-    has_rcu_fix,
-    calculate_score,
-    analyze_commit,
-)
+from .models import CommitInfo, QueryResult, FileChangeInfo
+from .git import traverse_commits, collect_commits_batch
+from .git import get_commit_info, is_git_repo
+from .git import get_commit_history, get_commits_since_date, get_commits_by_author
+from .parser import parse_commit_message, extract_keywords, extract_fix_tags, extract_functions, parse_subject, is_fix_commit
+from .subsystem import detect_subsystem, get_subsystem_hierarchy, get_all_subsystems
+from .bugtype import detect_bug_type, detect_all_bug_types, get_bug_type_description, get_all_bug_types
+from .analysis import has_lock_added, has_refcount_fix, has_rcu_fix, calculate_score, analyze_commit
 
 
-def analyze_commit_root_cause(commit: CommitInfo) -> "RootCauseResult":
-    """对 Commit 执行与在线侧对称的根因抽象分析
+# ─────────────────────────────────────────────────────────────
+#  单 commit 收集 (保持不变)
+# ─────────────────────────────────────────────────────────────
 
-    通过 RootCauseAnalyzer (28条规则 + 4层分层分析) 生成 RootCauseResult，
-    用于构造与在线宕机查询端结构对称的 embedding 文本。
-
-    这是连接"离线 Commit 语义理解"与"在线宕机检索"的关键桥梁，
-    确保离线侧补丁文档和在线侧宕机查询共享相同的语义分析维度。
-
-    Args:
-        commit: 已完成基本标注的 CommitInfo (subsystem/bug_type/lock_added 等已填充)
-
-    Returns:
-        RootCauseResult 对象，包含:
-        - root_cause: 根因诊断结论
-        - retrieval_query: ★ 与在线侧结构对称的 embedding 查询文本
-        - causal_chain: 因果推理链
-        - score: 置信度评分
-        - suggested_keywords: 建议搜索关键词
-
-    Example:
-        >>> from src.collector import collect_commit, analyze_commit_root_cause
-        >>> commit = collect_commit("abc123", "/path/to/linux")
-        >>> result = analyze_commit_root_cause(commit)
-        >>> print(result.root_cause)       # "Memory Corruption (List)"
-        >>> print(result.retrieval_query)  # 6层语义融合的查询文本
-    """
-    from ..indexer.pipeline import _commit_to_crash_feature, _enhance_fix_hints_with_diff
-    from ..analyzer.rootcause import get_analyzer, build_retrieval_query, analyze_call_trace_structure
-
-    # Step 1: CommitInfo → CrashFeature
-    feature = _commit_to_crash_feature(commit)
-
-    # Step 2: RootCauseAnalyzer 分析 (28规则+4层分层推断)
-    analyzer = get_analyzer()
-    result = analyzer.analyze(feature)
-
-    # Step 3: 用 commit diff 分析结果增强 fix_hints
-    analyzer_fix_hints = result.extra_info.get("fix_hints", {})
-    enhanced_fix_hints = _enhance_fix_hints_with_diff(commit, analyzer_fix_hints)
-
-    # Step 4: 重新构造 retrieval_query (使增强后的 fix_hints 生效)
-    trace_analysis = result.extra_info.get("trace_analysis", {})
-    result.retrieval_query = build_retrieval_query(
-        feature=feature,
-        root_cause=result.root_cause,
-        bug_type=result.bug_type,
-        causal_chain=result.causal_chain,
-        fix_hints=enhanced_fix_hints,
-        trace_analysis=trace_analysis,
-    )
-    result.extra_info["fix_hints"] = enhanced_fix_hints
-
-    return result
-
-
-def collect_commit(
-    commit_hash: str,
-    repo_path: str = ".",
-    use_root_cause: bool = False,
-) -> Optional[CommitInfo]:
+def collect_commit(commit_hash: str, repo_path: str = ".") -> Optional[CommitInfo]:
     """收集单个 commit 的完整信息
 
-    Args:
-        commit_hash: 提交哈希值
-        repo_path: Git 仓库路径
-        use_root_cause: 是否在采集阶段执行 Root Cause 对称分析 (默认 False,
-            因为 root cause 分析也可在后续索引阶段由 indexer pipeline 统一执行)
-
-    Returns:
-        CommitInfo 对象，如果 use_root_cause=True 则在 extra_info 中包含:
-        - root_cause_result: RootCauseResult 的 to_dict() 输出
-        - root_cause: 根因诊断结论
-        - root_cause_score: 置信度评分
-        - root_cause_query: retrieval_query 文本
+    流程: git提取 → parser解析 → subsystem识别 → bugtype识别 → analysis分析
     """
     if not is_git_repo(repo_path):
         return None
 
-    # 获取基本信息
     commit = get_commit_info(commit_hash, repo_path)
-    if not commit.commit_hash:
+    if not commit or not commit.commit_hash:
         return None
 
-    # 解析 commit 消息
+    return _analyze_full(commit)
+
+
+# ─────────────────────────────────────────────────────────────
+#  批量收集 — 一次遍历 (替代旧的二次遍历)
+# ─────────────────────────────────────────────────────────────
+
+def collect_commits(
+    repo_path: str = ".",
+    limit: int = 100,
+    *,
+    since: Optional[datetime] = None,
+    to: Optional[datetime] = None,
+    filepath: Optional[str] = None,
+    only_no_merge: bool = True,
+    only_in_branch: Optional[str] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> List[CommitInfo]:
+    """收集多个 commit 的完整信息 — 一次遍历
+
+    优化前 (两步):
+    1. get_commit_history() → [hash1, hash2, ...]  # 遍历一次
+    2. for hash in hashes: get_commit_info(hash)     # 再遍历 N 次
+    总计: 1 + N 次 PyDriller Repository 实例化
+
+    优化后 (一步):
+    1. traverse_commits(since, to, filepath, ...)   # 遍历一次
+    → 每个 commit 直接在遍历中完成全量提取
+    总计: 1 次 PyDriller Repository 实例化
+
+    PyDriller 的迭代器原生流式处理，百万级 commit 也不会 OOM。
+    """
+    if not is_git_repo(repo_path):
+        return []
+
+    results = []
+    for commit in traverse_commits(
+        repo_path=repo_path,
+        since=since,
+        to=to,
+        filepath=filepath,
+        only_no_merge=only_no_merge,
+        only_in_branch=only_in_branch,
+        order='reverse',
+        limit=limit,
+        progress_callback=progress_callback,
+    ):
+        _analyze_full(commit)
+        results.append(commit)
+
+    return results
+
+
+def collect_commits_stream(
+    repo_path: str = ".",
+    limit: Optional[int] = None,
+    *,
+    since: Optional[datetime] = None,
+    to: Optional[datetime] = None,
+    filepath: Optional[str] = None,
+    only_no_merge: bool = True,
+    only_in_branch: Optional[str] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> Generator[CommitInfo, None, None]:
+    """流式收集 commit — 生成器模式，一条一条产出
+
+    适合场景:
+    - 逐条入库 (写入向量库/SQLite)
+    - 流式分析 (不需要等全部收集完)
+    - 超大仓库 (百万级 commit，避免内存问题)
+
+    Example:
+        >>> for commit in collect_commits_stream(repo, limit=10000):
+        ...     indexer.index_one(commit)
+    """
+    if not is_git_repo(repo_path):
+        return
+
+    yield from (
+        _analyze_full(c)
+        for c in traverse_commits(
+            repo_path=repo_path,
+            since=since, to=to,
+            filepath=filepath,
+            only_no_merge=only_no_merge,
+            only_in_branch=only_in_branch,
+            order='reverse',
+            limit=limit,
+            progress_callback=progress_callback,
+        )
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+#  按日期/作者收集 (向下兼容)
+# ─────────────────────────────────────────────────────────────
+
+def collect_commits_since_date(
+    date: datetime, repo_path: str = "."
+) -> List[CommitInfo]:
+    """收集指定日期之后的 commit — 直接使用 since 参数，无需二次过滤"""
+    return collect_commits(repo_path=repo_path, since=date, only_no_merge=False)
+
+
+def collect_commits_by_author(
+    author: str, repo_path: str = "."
+) -> List[CommitInfo]:
+    """收集指定作者的 commit — PyDriller 层面暂无原生 author 过滤，遍历后筛选"""
+    if not is_git_repo(repo_path):
+        return []
+
+    results = []
+    author_lower = author.lower()
+    for commit in traverse_commits(repo_path=repo_path, only_no_merge=False):
+        if author_lower in commit.author.lower() or author_lower in commit.email.lower():
+            _analyze_full(commit)
+            results.append(commit)
+    return results
+
+
+# ─────────────────────────────────────────────────────────────
+#  内部: 完整的分析流水线 (collector → parser → subsystem → bugtype → analysis)
+# ─────────────────────────────────────────────────────────────
+
+def _analyze_full(commit: CommitInfo) -> CommitInfo:
+    """对一个 CommitInfo 执行全部分析流程"""
     commit = parse_commit_message(commit)
-
-    # 识别子系统
     commit.subsystem = detect_subsystem(commit)
-
-    # 识别 bug 类型
     commit.bug_type = detect_bug_type(commit)
-
-    # 分析高级特征
     commit = analyze_commit(commit)
-
-    # ★ 可选: Root Cause 对称分析
-    if use_root_cause:
-        try:
-            rc_result = analyze_commit_root_cause(commit)
-            commit.extra_info = getattr(commit, "extra_info", {}) or {}
-            commit.extra_info.update({
-                "root_cause_result": rc_result.to_dict(),
-                "root_cause": rc_result.root_cause,
-                "root_cause_score": rc_result.score,
-                "root_cause_query": rc_result.retrieval_query,
-            })
-        except Exception:
-            # 根因分析不应阻塞基础采集流程
-            pass
-
     return commit
 
 
-def collect_commits(repo_path: str = ".", limit: int = 100) -> List[CommitInfo]:
-    """收集多个 commit 的完整信息"""
-    commits = []
-
-    if not is_git_repo(repo_path):
-        return commits
-
-    commit_hashes = get_commit_history(repo_path, limit)
-
-    for commit_hash in commit_hashes:
-        if commit_hash:
-            commit = collect_commit(commit_hash, repo_path)
-            if commit:
-                commits.append(commit)
-
-    return commits
-
-
-def collect_commits_since_date(date, repo_path: str = ".") -> List[CommitInfo]:
-    """收集指定日期之后的 commit"""
-    commits = []
-
-    if not is_git_repo(repo_path):
-        return commits
-
-    commit_hashes = get_commits_since_date(date, repo_path)
-
-    for commit_hash in commit_hashes:
-        if commit_hash:
-            commit = collect_commit(commit_hash, repo_path)
-            if commit:
-                commits.append(commit)
-
-    return commits
-
-
-def collect_commits_by_author(author: str, repo_path: str = ".") -> List[CommitInfo]:
-    """收集指定作者的 commit"""
-    commits = []
-
-    if not is_git_repo(repo_path):
-        return commits
-
-    commit_hashes = get_commits_by_author(author, repo_path)
-
-    for commit_hash in commit_hashes:
-        if commit_hash:
-            commit = collect_commit(commit_hash, repo_path)
-            if commit:
-                commits.append(commit)
-
-    return commits
-
+# ─────────────────────────────────────────────────────────────
+#  导出
+# ─────────────────────────────────────────────────────────────
 
 __all__ = [
     # 数据类型
-    'CommitInfo',
-    'QueryResult',
+    'CommitInfo', 'QueryResult', 'FileChangeInfo',
 
     # Git 操作
-    'get_commit_history',
-    'get_commit_info',
-    'get_commits_since_date',
-    'get_commits_by_author',
-    'is_git_repo',
+    'traverse_commits', 'collect_commits_batch',
+    'get_commit_info', 'is_git_repo',
+    'get_commit_history', 'get_commits_since_date', 'get_commits_by_author',
 
     # 解析功能
-    'extract_keywords',
-    'extract_fix_tags',
-    'extract_functions',
-    'parse_commit_message',
-    'is_fix_commit',
+    'extract_keywords', 'extract_fix_tags', 'extract_functions',
+    'parse_commit_message', 'is_fix_commit', 'parse_subject',
 
     # 子系统识别
-    'detect_subsystem',
-    'get_subsystem_hierarchy',
-    'get_all_subsystems',
+    'detect_subsystem', 'get_subsystem_hierarchy', 'get_all_subsystems',
 
     # Bug 类型识别
-    'detect_bug_type',
-    'detect_all_bug_types',
-    'get_bug_type_description',
-    'get_all_bug_types',
+    'detect_bug_type', 'detect_all_bug_types',
+    'get_bug_type_description', 'get_all_bug_types',
 
     # 分析功能
-    'has_lock_added',
-    'has_refcount_fix',
-    'has_rcu_fix',
-    'calculate_score',
-    'analyze_commit',
-
-    # ★ Root Cause 对称分析 (新增)
-    'analyze_commit_root_cause',
+    'has_lock_added', 'has_refcount_fix', 'has_rcu_fix',
+    'calculate_score', 'analyze_commit',
 
     # 综合功能
-    'collect_commit',
-    'collect_commits',
-    'collect_commits_since_date',
-    'collect_commits_by_author',
+    'collect_commit', 'collect_commits', 'collect_commits_stream',
+    'collect_commits_since_date', 'collect_commits_by_author',
 ]

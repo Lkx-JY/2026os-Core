@@ -167,34 +167,6 @@ if commit:
     print(f"Score: {commit.score}")
 ```
 
-### ★ Root Cause 对称分析 (新增)
-
-对单个 commit 执行与在线宕机分析侧对称的根因抽象分析：
-
-```python
-from src.collector import collect_commit, analyze_commit_root_cause
-
-# 先收集 commit 基本信息
-commit = collect_commit(commit_hash="abc123", repo_path="/path/to/linux")
-
-# 执行 Root Cause 对称分析
-result = analyze_commit_root_cause(commit)
-print(f"Root Cause: {result.root_cause}")
-print(f"Bug Type: {result.bug_type}")
-print(f"Score: {result.score}")
-print(f"Causal Chain: {result.causal_chain}")
-print(f"Retrieval Query:\n{result.retrieval_query}")
-```
-
-`analyze_commit_root_cause()` 内部流程:
-1. CommitInfo → CrashFeature 映射
-2. RootCauseAnalyzer.analyze() (28规则+4层分层分析)
-3. 用 commit 的 diff 分析结果 (lock_added/refcount_fix/rcu_fix) 增强 fix_hints
-4. build_retrieval_query() 构造 6层语义融合的检索查询文本
-
-注意: 在批量索引场景中，Root Cause 对称分析由 `indexer.pipeline.prepare_commit_embedding_text(use_root_cause=True)` 自动执行，
-无需手动调用 `analyze_commit_root_cause()`。
-
 ### 收集多个 Commits
 
 ```python
