@@ -15,7 +15,7 @@ PyDriller Repository 原生支持的过滤器 (直接在构造函数中传入):
 """
 
 import os
-from typing import List, Optional, Callable, Iterator, Generator
+from typing import List, Optional, Callable, Generator, Any, Dict
 from datetime import datetime
 from pydriller import Repository, ModifiedFile
 from ..models import CommitInfo, FileChangeInfo
@@ -41,8 +41,11 @@ def _extract_file_changes(modified_files: List[ModifiedFile]) -> List[FileChange
         diff_parsed_added = []
         diff_parsed_deleted = []
         if hasattr(m, 'diff_parsed') and m.diff_parsed:
-            diff_parsed_added = m.diff_parsed.get('added', []) or []
-            diff_parsed_deleted = m.diff_parsed.get('deleted', []) or []
+            # PyDriller 返回的是 List[Tuple[int, str]]，提取内容部分
+            added_tuples = m.diff_parsed.get('added', []) or []
+            deleted_tuples = m.diff_parsed.get('deleted', []) or []
+            diff_parsed_added = [line[1] for line in added_tuples]
+            diff_parsed_deleted = [line[1] for line in deleted_tuples]
 
         results.append(FileChangeInfo(
             filename=m.filename or "",
@@ -51,9 +54,9 @@ def _extract_file_changes(modified_files: List[ModifiedFile]) -> List[FileChange
             change_type=str(m.change_type.name) if hasattr(m.change_type, 'name') else "MODIFY",
             added_lines=m.added_lines or 0,
             deleted_lines=m.deleted_lines or 0,
-            nloc=m.nloc if hasattr(m, 'nloc') else 0,
-            complexity=m.complexity if hasattr(m, 'complexity') else 0,
-            methods=list(m.methods) if (hasattr(m, 'methods') and m.methods) else [],
+            nloc=m.nloc or 0,
+            complexity=m.complexity or 0,
+            methods=[met.name for met in m.methods] if (hasattr(m, 'methods') and m.methods) else [],
             diff=m.diff or "",
             diff_parsed_added=diff_parsed_added,
             diff_parsed_deleted=diff_parsed_deleted,
@@ -126,7 +129,7 @@ def traverse_commits(
     Yields:
         CommitInfo 对象 (每个 commit 包含完整的 file_changes)
     """
-    repo_kwargs = {
+    repo_kwargs: Dict[str, Any] = {
         "path_to_repo": repo_path,
         "order": order,
     }
@@ -147,7 +150,9 @@ def traverse_commits(
     estimated = _estimate_commit_count(repo_path, since, to, filepath, only_no_merge)
 
     try:
-        for commit in Repository(**repo_kwargs).traverse_commits():
+        # 使用 Repository 初始化，避免 Pylance 误判 Dict 类型
+        repo = Repository(**repo_kwargs)
+        for commit in repo.traverse_commits():
             yield _commit_to_info(commit)
             count += 1
             if limit and count >= limit:
