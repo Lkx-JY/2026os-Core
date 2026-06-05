@@ -18,7 +18,7 @@ class CommitInfo:
     deletions: int = 0
     diff_content: str = ""
     parent_hashes: List[str] = field(default_factory=list)
-    
+
     subsystem: str = "unknown"
     bug_type: str = "unknown"
     fix_tags: List[str] = field(default_factory=list)
@@ -26,9 +26,12 @@ class CommitInfo:
     lock_added: bool = False
     refcount_fix: bool = False
     rcu_fix: bool = False
-    
+
     score: float = 0.0
-    
+
+    # ★ 扩展信息 (Root Cause 分析结果等)
+    extra_info: Dict = field(default_factory=dict)
+
     def to_dict(self) -> Dict:
         return {
             "commit_hash": self.commit_hash,
@@ -44,7 +47,8 @@ class CommitInfo:
             "lock_added": self.lock_added,
             "refcount_fix": self.refcount_fix,
             "rcu_fix": self.rcu_fix,
-            "score": self.score
+            "score": self.score,
+            "extra_info": self.extra_info,
         }
     
     @classmethod

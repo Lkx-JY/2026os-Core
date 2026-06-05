@@ -108,12 +108,15 @@ src/indexer/
 
 | 功能 | 函数 | 说明 |
 |------|------|------|
-| 离线批量索引 | `index_commits()` | 全量构建向量索引 |
+| 离线批量索引 | `index_commits()` | 全量构建向量索引 (支持 `use_root_cause` 参数) |
 | 增量索引 | `index_commits_incremental()` | 增量添加新 commit |
 | 在线查询向量 | `get_query_vector()` | 分析结果 → 查询向量 (优先使用 retrieval_query) |
 | 一站式检索 | `search_similar_commits()` | 分析结果 → Top-K 候选 commit |
-| Embedding 文本构造 | `prepare_commit_embedding_text()` | Commit 语义增强拼接 |
+| ★ Embedding 文本构造 | `prepare_commit_embedding_text()` | ★ 通过 RootCauseAnalyzer (28规则+4层分析) 生成与在线侧对称的 embedding 文本 |
 | 检索查询构造 | `prepare_rootcause_embedding_text()` | RootCauseResult → 查询文本 |
+| ★ 对称分析辅助 | `_commit_to_crash_feature()` | CommitInfo → CrashFeature 映射 |
+| | `_enhance_fix_hints_with_diff()` | 将 diff 分析结果融合进 fix_hints |
+| | `_build_commit_root_cause_embedding_text()` | 完整的对称 embedding 文本构造流程 |
 
 ---
 
@@ -131,8 +134,12 @@ Linux Kernel Git Repo
          │ List[CommitInfo]
          ▼
 ┌─────────────────┐
-│ prepare_commit   │  语义增强拼接:
-│ _embedding_text  │  Title + Subsystem + BugType + Files + Message + KeyDiffLines
+│ prepare_commit   │  ★ Root Cause 对称分析:
+│ _embedding_text  │  1. CommitInfo → CrashFeature
+│ (use_root_cause  │  2. RootCauseAnalyzer (28规则+4层分析)
+│  =True, 默认)     │  3. 增强 fix_hints (融入 diff 证据)
+│                  │  4. build_retrieval_query (6层语义融合)
+│                  │  5. 追加 KeyDiffLines
 └────────┬────────┘
          │ 优化后的文本
          ▼
