@@ -4,6 +4,7 @@ sentence-transformers
 faiss-cpu
 pymilvus
 openai
+loguru
 fastapi
 uvicorn
 pyyaml
@@ -11,3 +12,4 @@ torch
 transformers
 numpy
 pandas
+psutil
