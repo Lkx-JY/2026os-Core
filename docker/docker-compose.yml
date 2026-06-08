@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./configs:/app/configs
+    environment:
+      - MILVUS_HOST=milvus
+      - REDIS_HOST=redis
+  
+  milvus:
+    image: milvusdb/milvus:latest
+    ports:
+      - "19530:19530"
+  
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"

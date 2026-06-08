@@ -7,20 +7,15 @@
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
 
+# 仅导入 analyzer（不依赖 numpy）
 from ..analyzer import (
     CrashFeature,
     RootCauseResult,
     run_analysis_pipeline,
 )
-from ..indexer import (
-    get_query_vector,
-)
-from ..retriever import (
-    RetrievalResult,
-    RetrievalMode,
-    run_retrieval_pipeline,
-    RankedItem,
-)
+
+# indexer 和 retriever 延迟导入（依赖 numpy）
+# 将在函数内部按需导入
 
 
 # ============================================================================
@@ -39,7 +34,7 @@ class OnlineDiagnosisResult:
     root_cause_result: Optional[RootCauseResult] = None
 
     # 检索结果
-    retrieval_result: Optional[RetrievalResult] = None
+    retrieval_result: Optional[Any] = None  # 延迟类型
 
     # 查询向量 (1024-dim float32)
     query_vector: Optional[Any] = None
@@ -108,7 +103,7 @@ def run_online_diagnosis(
     vmlinux_path: Optional[str] = None,
     use_llm: bool = False,
     model_name: str = "deepseek-chat",
-    retrieval_mode: str = RetrievalMode.STANDARD,
+    retrieval_mode: str = "standard",
     top_k: int = 100,
 ) -> OnlineDiagnosisResult:
     """运行完整的在线诊断流程
@@ -165,9 +160,15 @@ def run_online_diagnosis(
         result.root_cause_result = root_cause
         result.crash_feature = root_cause.crash_feature
 
+        # ── 延迟导入 indexer（依赖 numpy）─────────────────────
+        from ..indexer import get_query_vector
+
         # ── Step 3: Embedding 编码 (BGE-M3 向量化) ──────────
         query_vector = get_query_vector(root_cause)
         result.query_vector = query_vector
+
+        # ── 延迟导入 retriever（依赖 numpy）───────────────────
+        from ..retriever import run_retrieval_pipeline
 
         # ── Step 4+5: 在线检索 + 多阶段排序 ─────────────────
         retrieval = run_retrieval_pipeline(
@@ -209,6 +210,7 @@ def encode_root_cause_for_search(
         >>> query_vec = encode_root_cause_for_search(result)
         >>> print(query_vec.shape)  # (1024,)
     """
+    from ..indexer import get_query_vector
     return get_query_vector(root_cause_result)
 
 
@@ -232,7 +234,7 @@ def batch_diagnosis(
         result = run_online_diagnosis(
             dmesg_content=dmesg,
             use_llm=use_llm,
-            retrieval_mode=RetrievalMode.FAST,
+            retrieval_mode="fast",
             top_k=top_k,
         )
         results.append(result)
