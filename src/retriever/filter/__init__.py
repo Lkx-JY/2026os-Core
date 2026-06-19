@@ -240,9 +240,23 @@ def filter_by_kernel_version(
     rejected = []
     for cand in candidates:
         cand_date = cand.get("date", "")
-        # 从 commit 日期推断大致版本范围
-        # 简单策略: 都通过，因为无法从 date 精确确定版本
-        # 在 Milvus filter_expr 中做更精确的过滤
+        cand_subject = cand.get("subject", "")
+
+        # 策略1: 从 subject 中提取版本信息 (如 "6.1", "v5.15")
+        import re
+        ver_match = re.search(r'(?:^|\s)(?:v|linux-)?(\d+)\.(\d+)', cand_subject + cand.get("message", ""))
+        if ver_match:
+            try:
+                cand_major = int(ver_match.group(1))
+                cand_minor = int(ver_match.group(2))
+                if cand_major == target_major and abs(cand_minor - target_minor) <= version_tolerance:
+                    passed.append(cand)
+                    continue
+            except ValueError:
+                pass
+
+        # 策略2: 从日期推断 — 较新的 commit 可能是较新版本
+        # 由于日期→版本映射不可靠，对无版本标记的 commit 采用宽松策略(通过)
         passed.append(cand)
 
     return FilterResult(

@@ -117,17 +117,48 @@ class BGEEncoder(BaseEncoder):
         return self._init_error
 
     def _lazy_init(self):
-        """延迟初始化模型 — 减少启动开销"""
+        """延迟初始化模型 — 减少启动开销
+
+        下载策略:
+        1. 优先从本地缓存加载
+        2. 尝试 HuggingFace Hub
+        3. HuggingFace 不可达时自动切换到 ModelScope 镜像
+        """
         if self._initialized:
             return
 
         try:
             from sentence_transformers import SentenceTransformer
-            self.model = SentenceTransformer(
-                self.model_name,
-                device=self.device,
-                trust_remote_code=True,
-            )
+
+            # 首先尝试从本地缓存加载
+            try:
+                self.model = SentenceTransformer(
+                    self.model_name,
+                    device=self.device,
+                    trust_remote_code=True,
+                )
+            except Exception as hf_err:
+                # HuggingFace 不可达，尝试 ModelScope 镜像
+                hf_error_str = str(hf_err).lower()
+                is_network_error = any(kw in hf_error_str for kw in [
+                    "network is unreachable", "connection", "timeout",
+                    "cannot send a request", "client has been closed",
+                ])
+                if is_network_error:
+                    print(f"  HuggingFace 不可达, 尝试 ModelScope 镜像...")
+                    model_id = None
+                    model_path = self._download_from_modelscope()
+                    if model_path:
+                        self.model = SentenceTransformer(
+                            model_path,
+                            device=self.device,
+                            trust_remote_code=True,
+                        )
+                    else:
+                        raise hf_err
+                else:
+                    raise hf_err
+
             # 验证实际输出维度
             test_vec = self.model.encode(["test"], normalize_embeddings=False)
             actual_dim = test_vec.shape[1]
@@ -144,6 +175,39 @@ class BGEEncoder(BaseEncoder):
         except Exception as e:
             self._init_error = str(e)
             self._initialized = True
+
+    def _download_from_modelscope(self) -> Optional[str]:
+        """从 ModelScope 下载模型，返回本地路径"""
+        import os
+
+        # BGE-M3 在 ModelScope 上的模型 ID
+        modelscope_model_map = {
+            "BAAI/bge-m3": "Xorbits/bge-m3",
+            "BAAI/bge-large-en-v1.5": "AI-ModelScope/bge-large-en-v1.5",
+            "BAAI/bge-large-zh-v1.5": "AI-ModelScope/bge-large-zh-v1.5",
+            "BAAI/bge-reranker-v2-m3": "Xorbits/bge-reranker-v2-m3",
+        }
+
+        ms_model_id = modelscope_model_map.get(self.model_name)
+        if not ms_model_id:
+            return None
+
+        try:
+            from modelscope import snapshot_download
+
+            cache_dir = os.path.expanduser("~/.cache/modelscope/hub")
+            local_path = snapshot_download(
+                ms_model_id,
+                cache_dir=cache_dir,
+            )
+            print(f"  ModelScope 下载成功: {local_path}")
+            return local_path
+        except ImportError:
+            print("  modelscope 未安装, 跳过")
+            return None
+        except Exception as e:
+            print(f"  ModelScope 下载失败: {e}")
+            return None
 
     def encode(
         self,

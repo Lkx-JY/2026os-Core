@@ -25,6 +25,29 @@ def main():
     port = int(os.environ.get("PORT", "8000"))
     reload = os.environ.get("RELOAD", "true").lower() == "true"
 
+    # ★ 启动前检查 API Key
+    skip_check = os.environ.get("SKIP_API_KEY_CHECK", "").strip() in ("1", "true", "yes")
+    if not skip_check:
+        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            print("""
+╔══════════════════════════════════════════════════════════╗
+║  ❌ 未配置 OPENAI_API_KEY                               ║
+╠══════════════════════════════════════════════════════════╣
+║  请设置环境变量:                                        ║
+║    export OPENAI_API_KEY=sk-your-api-key-here            ║
+║                                                        ║
+║  API Key 获取:                                          ║
+║    https://platform.deepseek.com/api_keys               ║
+║                                                        ║
+║  ⚠️  费用: 用户自行承担 LLM API 调用费用               ║
+║                                                        ║
+║  跳过检查 (仅本地测试):                                 ║
+║    export SKIP_API_KEY_CHECK=1                          ║
+╚══════════════════════════════════════════════════════════╝
+""")
+            sys.exit(1)
+
     print(f"""
 ╔══════════════════════════════════════════════════════════╗
 ║        Core.LinuxCommit — API Server                    ║

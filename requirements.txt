@@ -3,8 +3,8 @@ GitPython
 sentence-transformers
 faiss-cpu
 pymilvus
+milvus-lite
 openai
-loguru
 fastapi
 uvicorn
 pyyaml
@@ -12,21 +12,8 @@ torch
 transformers
 numpy
 pandas
+redis
+loguru
 psutil
-
-# BGE 模型支持
-FlagEmbedding>=1.2.0
-
-# 内核调试工具
-drgn>=0.0.24
-
-# 数据库
-sqlalchemy>=2.0
-psycopg2-binary>=2.9
-redis>=5.0
-
-# API 生产部署
-gunicorn>=21.0
-httpx>=0.27
-python-multipart>=0.0.9
-pydantic>=2.0
+pyarrow
+tqdm

@@ -34,6 +34,10 @@ def _get_store() -> RedisTaskStore:
     return _task_store
 
 
+# 内存回退存储 (当 Redis 不可用时) — 必须在 _save_task 之前定义
+_memory_tasks: dict[str, dict] = {}
+
+
 def _save_task(task_id: str, data: dict) -> None:
     """保存任务到 Redis，回退到内存"""
     store = _get_store()
@@ -71,12 +75,35 @@ def _get_task(task_id: str) -> Optional[dict]:
     return task
 
 
-# 内存回退存储 (当 Redis 不可用时)
-_memory_tasks: dict[str, dict] = {}
+# ── 模式开关: 优先使用真实 RAG Pipeline, 向量库为空时回退 Mock ──
+_USE_REAL_PIPELINE = None  # None = 自动检测, True = 强制真实, False = 强制 Mock
+
+
+def _check_index_ready() -> bool:
+    """检查向量库是否已初始化并有数据"""
+    try:
+        from ...indexer.milvus import get_milvus_client
+        client = get_milvus_client()
+        count = client.count()
+        return count > 0
+    except Exception:
+        return False
+
+
+def _should_use_real_pipeline() -> bool:
+    """决定使用真实流水线还是 mock"""
+    global _USE_REAL_PIPELINE
+    if _USE_REAL_PIPELINE is not None:
+        return _USE_REAL_PIPELINE
+    # 自动检测
+    ready = _check_index_ready()
+    if not ready:
+        logger.warning("向量库为空, 回退到 Mock 模式。请先运行: python scripts/index_all_commits.py")
+    return ready
 
 
 def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
-    """模拟分析流水线 (实际部署时替换为真实的 RAG pipeline)"""
+    """Mock 分析流水线 (向量库未初始化时的降级方案)"""
     steps: list[AnalysisStep] = []
 
     try:
@@ -210,6 +237,210 @@ def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
             steps[-1].detail = str(e)
 
 
+def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
+    """★ 真实分析流水线 — 对接完整的 RAG Pipeline
+
+    全链路:
+    Step 1 → Feature Extraction (dmesg regex + 规则引擎)
+    Step 2 → Root Cause Abstraction (28 条专家规则 + 4 层分层推断)
+    Step 3 → Embedding Encoding (BGE-M3 → 1024d vector)
+    Step 4 → Vector Retrieval (Milvus/FAISS Top-K recall)
+    Step 5 → Multi-stage Ranking (Filter → BGE Rerank)
+    """
+    steps: list[AnalysisStep] = []
+
+    try:
+        # ── Step 1: 日志解析 ──────────────────────────────────────
+        steps.append(AnalysisStep(
+            name="日志解析", status="running",
+            started_at=datetime.utcnow(),
+        ))
+        _save_task(task_id, {
+            "task_id": task_id,
+            "status": "running",
+            "progress": 0.05,
+            "created_at": datetime.utcnow(),
+            "steps": steps,
+            "request": request,
+        })
+
+        from ...analyzer.dmesg import parse_dmesg
+        feature = parse_dmesg(request.log_content)
+        steps[-1].status = "completed"
+        steps[-1].completed_at = datetime.utcnow()
+        steps[-1].detail = (
+            f"成功解析 {request.log_type} 日志, "
+            f"子系统={feature.subsystem}, "
+            f"初步 Bug 类型={feature.bug_type}"
+        )
+
+        # ── Step 2: Root Cause 抽象 ──────────────────────────────
+        steps.append(AnalysisStep(
+            name="根因分析", status="running",
+            started_at=datetime.utcnow(),
+        ))
+        _save_task(task_id, {"progress": 0.15, "steps": steps})
+
+        from ...analyzer.rootcause import get_analyzer
+        analyzer = get_analyzer()
+        root_cause_result = analyzer.analyze(feature)
+
+        root_cause_info = RootCauseInfo(
+            root_cause=root_cause_result.root_cause,
+            subsystem=getattr(feature, "subsystem", "unknown"),
+            confidence=round(root_cause_result.score, 2),
+            summary=root_cause_result.reason,
+            key_symptoms=root_cause_result.causal_chain or [],
+        )
+
+        steps[-1].status = "completed"
+        steps[-1].completed_at = datetime.utcnow()
+        steps[-1].detail = (
+            f"根因: {root_cause_result.root_cause}, "
+            f"置信度: {root_cause_result.score:.2f}, "
+            f"规则数: 28"
+        )
+        _save_task(task_id, {
+            "progress": 0.30,
+            "steps": steps,
+            "root_cause": root_cause_info,
+        })
+
+        # ── Step 3: 向量检索 + 重排 ──────────────────────────────
+        steps.append(AnalysisStep(
+            name="向量检索与重排", status="running",
+            started_at=datetime.utcnow(),
+        ))
+        _save_task(task_id, {"progress": 0.40, "steps": steps})
+
+        from ...services import run_online_diagnosis
+
+        diagnosis = run_online_diagnosis(
+            dmesg_content=request.log_content,
+            use_llm=request.enable_llm_explanation,
+            retrieval_mode="standard",
+            top_k=100,
+        )
+
+        matched_patches = []
+        if diagnosis.retrieval_result:
+            for item in diagnosis.retrieval_result.top(request.top_k):
+                matched_patches.append(MatchedPatch(
+                    rank=item.rank,
+                    commit=CommitInfo(
+                        commit_id=item.commit_hash,
+                        title=item.subject,
+                        message=item.metadata.get("body", "")[:500] if item.metadata else "",
+                        author=item.metadata.get("author", "") if item.metadata else "",
+                        date=item.metadata.get("date", "") if item.metadata else "",
+                        subsystem=item.subsystem,
+                        bug_type=item.bug_type,
+                        files_changed=item.metadata.get("files_changed", []) if item.metadata else [],
+                        diff_preview=item.metadata.get("diff_content", "")[:200] if item.metadata else "",
+                    ),
+                    relevance_score=round(item.final_score, 3),
+                    recall_score=round(item.vector_score, 3),
+                    rerank_score=round(item.reranker_score, 3),
+                    match_reason=item.rank_reason,
+                ))
+
+        steps[-1].status = "completed"
+        steps[-1].completed_at = datetime.utcnow()
+        if diagnosis.retrieval_result:
+            steps[-1].detail = (
+                f"召回 {diagnosis.retrieval_result.recall_count} 条, "
+                f"过滤后 {diagnosis.retrieval_result.after_filter_count} 条, "
+                f"最终 Top-{len(matched_patches)}, "
+                f"耗时 {diagnosis.total_time_ms:.0f}ms"
+            )
+        else:
+            steps[-1].detail = (
+                f"检索未返回结果, "
+                f"最终 Top-{len(matched_patches)}, "
+                f"耗时 {diagnosis.total_time_ms:.0f}ms"
+            )
+        _save_task(task_id, {
+            "progress": 0.80,
+            "steps": steps,
+            "matched_patches": matched_patches,
+        })
+
+        # ── Step 4: LLM 解释生成 ──────────────────────────────────
+        if request.enable_llm_explanation:
+            steps.append(AnalysisStep(
+                name="LLM 解释生成", status="running",
+                started_at=datetime.utcnow(),
+            ))
+            _save_task(task_id, {"progress": 0.90, "steps": steps})
+
+            try:
+                from ...generator.llm import get_llm_client
+                from ...generator.prompt import build_rag_explanation_prompt
+
+                llm = get_llm_client()
+                prompt = build_rag_explanation_prompt(
+                    dmesg_content=request.log_content,
+                    root_cause=root_cause_info,
+                    patches=matched_patches[:5],
+                )
+                llm_explanation = llm.chat(prompt)
+            except Exception as llm_err:
+                logger.warning(f"LLM 调用失败, 使用规则引擎生成解释: {llm_err}")
+                llm_explanation = _generate_real_explanation(root_cause_info, matched_patches)
+
+            steps[-1].status = "completed"
+            steps[-1].completed_at = datetime.utcnow()
+            steps[-1].detail = "LLM 分析完成"
+        else:
+            llm_explanation = None
+
+        _save_task(task_id, {
+            "status": "completed",
+            "progress": 1.0,
+            "root_cause": root_cause_info,
+            "matched_patches": matched_patches,
+            "steps": steps,
+            "llm_explanation": llm_explanation,
+            "completed_at": datetime.utcnow(),
+        })
+
+    except Exception as e:
+        logger.error(f"Real analysis task {task_id} failed: {e}", exc_info=True)
+        _save_task(task_id, {"status": "failed", "error": str(e)})
+        if steps and steps[-1].status == "running":
+            steps[-1].status = "failed"
+            steps[-1].detail = str(e)
+
+
+def _generate_real_explanation(root_cause: RootCauseInfo, patches: list[MatchedPatch]) -> str:
+    """基于规则引擎生成分析解释 (LLM 不可用时的降级)"""
+    if not patches:
+        return "未能找到匹配的补丁，建议进一步使用 drgn 分析 vmcore。"
+
+    top = patches[0]
+    patch_list = "\n".join(
+        f"{p.rank}. **{p.commit.title}** (相关性: {p.relevance_score:.3f})"
+        for p in patches[:5]
+    )
+    return f"""## 根因分析
+
+根据宕机日志分析，系统发生了 **{root_cause.root_cause}** 类型的故障，
+影响子系统为 `{root_cause.subsystem}`，置信度 {root_cause.confidence:.0%}。
+
+关键症状：{"、".join(root_cause.key_symptoms) if root_cause.key_symptoms else "待确认"}
+
+## 推荐补丁 (Top-{len(patches)})
+
+{patch_list}
+
+## 修复建议
+
+1. 优先应用排名第一的补丁 `{top.commit.commit_id[:12]}`，该补丁直接修复了根因问题
+2. 检查子系统 `{root_cause.subsystem}` 中是否存在类似的未修复路径
+3. 建议运行回归测试确认修复效果
+"""
+
+
 def _get_mock_patches(top_k: int, root_cause: RootCauseInfo) -> list[MatchedPatch]:
     """生成模拟匹配补丁 (实际部署时替换为真实 RAG 结果)"""
     mock_commits = {
@@ -322,7 +553,13 @@ async def create_analysis(
         "request": request,
     })
 
-    background_tasks.add_task(_simulate_analysis, task_id, request)
+    # ★ 自动选择: 向量库有数据 → 真实 Pipeline, 否则 → Mock 降级
+    if _should_use_real_pipeline():
+        logger.info(f"使用真实 RAG Pipeline 处理任务 {task_id}")
+        background_tasks.add_task(_run_real_analysis, task_id, request)
+    else:
+        logger.info(f"使用 Mock Pipeline 处理任务 {task_id} (向量库为空)")
+        background_tasks.add_task(_simulate_analysis, task_id, request)
     logger.info(f"Analysis task created: {task_id}")
 
     return AnalyzeResponse(

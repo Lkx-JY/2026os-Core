@@ -15,7 +15,76 @@ logger = get_logger()
 router = APIRouter(prefix="/search", tags=["Search"])
 
 
-# 模拟 Commit 数据 (实际部署时从 Milvus/数据库中查询)
+def _is_index_ready() -> bool:
+    """检查向量库是否可用"""
+    try:
+        from ...indexer.milvus import get_milvus_client
+        return get_milvus_client().count() > 0
+    except Exception:
+        return False
+
+
+def _search_real(query: str, top_k: int = 50,
+                 subsystem: Optional[str] = None,
+                 bug_type: Optional[str] = None) -> list[dict]:
+    """使用真实向量检索"""
+    from ...retriever.pipeline import quick_search
+    from ...indexer.milvus import get_milvus_client
+
+    # 构建过滤表达式
+    filter_expr = None
+    conditions = []
+    if subsystem:
+        conditions.append(f'subsystem=="{subsystem}"')
+    if bug_type:
+        conditions.append(f'bug_type=="{bug_type}"')
+    if conditions:
+        filter_expr = " && ".join(conditions)
+
+    if filter_expr:
+        client = get_milvus_client()
+        from ...indexer.embedding import encode_text
+
+        query_vec = encode_text([query])[0]
+        result = client.search(query_vec, top_k=top_k, filter_expr=filter_expr)
+        candidates = result.to_dict_list()
+        return candidates
+
+    result = quick_search(query, top_k=top_k, mode="fast")
+    items = []
+    for item in result.ranked_items:
+        meta = item.metadata or {}
+        items.append({
+            "commit_id": item.commit_hash,
+            "title": item.subject,
+            "message": meta.get("body", ""),
+            "author": meta.get("author", ""),
+            "date": meta.get("date", ""),
+            "subsystem": item.subsystem,
+            "bug_type": item.bug_type,
+            "files_changed": meta.get("files_changed", []),
+            "fix_tags": meta.get("fix_tags", []),
+            "relevance_score": item.final_score,
+            "vector_score": item.vector_score,
+            "reranker_score": item.reranker_score,
+        })
+    return items
+
+
+def _get_facets_real(results: list[dict]) -> dict:
+    """从真实检索结果聚合约面统计"""
+    subsystems = {}
+    bug_types = {}
+    for r in results:
+        sub = r.get("subsystem", "unknown")
+        bt = r.get("bug_type", "unknown")
+        subsystems[sub] = subsystems.get(sub, 0) + 1
+        bug_types[bt] = bug_types.get(bt, 0) + 1
+    return {"subsystems": subsystems, "bug_types": bug_types}
+
+
+# ── Mock 数据 (向量库为空时的降级) ─────────────────────────────────
+
 _MOCK_COMMITS: list[dict] = [
     {
         "commit_id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f67890",
@@ -103,7 +172,7 @@ _MOCK_COMMITS: list[dict] = [
     },
 ]
 
-# 按 commit_id 建立索引
+# Mock 数据索引
 _COMMIT_MAP: dict[str, dict] = {c["commit_id"]: c for c in _MOCK_COMMITS}
 
 
@@ -120,66 +189,112 @@ async def search_commits(
     - 按 Bug 类型过滤
     - 按内核版本过滤
     - 分页
+
+    ★ 自动检测: 向量库有数据时使用真实语义检索, 否则回退 Mock
     """
-    query_lower = request.query.lower()
-    results = []
-
-    for commit in _MOCK_COMMITS:
-        # 文本匹配
-        text_match = (
-            query_lower in commit["title"].lower()
-            or query_lower in commit["message"].lower()
-            or any(query_lower in f.lower() for f in commit["files_changed"])
-            or any(query_lower in t.lower() for t in commit.get("fix_tags", []))
+    if _is_index_ready():
+        logger.info(f"使用真实向量检索: query='{request.query}'")
+        # ★ 真实向量检索
+        all_results = _search_real(
+            query=request.query,
+            top_k=200,
+            subsystem=request.subsystem,
+            bug_type=request.bug_type,
         )
+        facets = _get_facets_real(all_results)
+    else:
+        logger.info(f"使用 Mock 检索: query='{request.query}'")
+        # Mock 降级
+        query_lower = request.query.lower()
+        all_results = []
+        for commit in _MOCK_COMMITS:
+            text_match = (
+                query_lower in commit["title"].lower()
+                or query_lower in commit["message"].lower()
+                or any(query_lower in f.lower() for f in commit["files_changed"])
+                or any(query_lower in t.lower() for t in commit.get("fix_tags", []))
+            )
+            if not text_match:
+                continue
+            if request.subsystem and commit["subsystem"] != request.subsystem:
+                continue
+            if request.bug_type and commit.get("bug_type") != request.bug_type:
+                continue
+            all_results.append(commit)
 
-        if not text_match:
-            continue
+        subsystems = {}
+        bug_types = {}
+        for c in all_results:
+            subsystems[c["subsystem"]] = subsystems.get(c["subsystem"], 0) + 1
+            if c.get("bug_type"):
+                bug_types[c["bug_type"]] = bug_types.get(c["bug_type"], 0) + 1
+        facets = {"subsystems": subsystems, "bug_types": bug_types}
 
-        # 过滤器
-        if request.subsystem and commit["subsystem"] != request.subsystem:
-            continue
-        if request.bug_type and commit.get("bug_type") != request.bug_type:
-            continue
-
-        results.append(CommitInfo(**commit))
-
-    # 分面统计
-    subsystems = {}
-    bug_types = {}
-    for c in results:
-        subsystems[c.subsystem] = subsystems.get(c.subsystem, 0) + 1
-        if c.bug_type:
-            bug_types[c.bug_type] = bug_types.get(c.bug_type, 0) + 1
-
-    total = len(results)
+    total = len(all_results)
 
     # 分页
     start = (request.page - 1) * request.page_size
     end = start + request.page_size
-    page_results = results[start:end]
+    page_results = all_results[start:end]
+
+    # 转换为 CommitInfo
+    commit_infos = []
+    for r in page_results:
+        commit_infos.append(CommitInfo(
+            commit_id=r.get("commit_id", ""),
+            title=r.get("title", ""),
+            message=r.get("message", ""),
+            author=r.get("author", ""),
+            date=r.get("date", ""),
+            subsystem=r.get("subsystem", "unknown"),
+            bug_type=r.get("bug_type", "unknown"),
+            files_changed=r.get("files_changed", []),
+            diff_preview=r.get("diff_preview", ""),
+            fix_tags=r.get("fix_tags", []),
+        ))
 
     return SearchResponse(
         query=request.query,
         total=total,
         page=request.page,
         page_size=request.page_size,
-        results=page_results,
-        facets={
-            "subsystems": subsystems,
-            "bug_types": bug_types,
-        },
+        results=commit_infos,
+        facets=facets,
     )
 
 
 @router.get("/{commit_id}", response_model=CommitDetailResponse)
 async def get_commit_detail(commit_id: str) -> CommitDetailResponse:
     """获取单个 Commit 的详细信息"""
+    # 优先从向量库查找
+    if _is_index_ready():
+        from ...indexer.milvus import get_milvus_client
+        from ...indexer.embedding import encode_text
+        client = get_milvus_client()
+        query_vec = encode_text([commit_id])[0]
+        result = client.search(query_vec, top_k=5)
+        for item in result.to_dict_list():
+            if item.get("commit_hash") == commit_id:
+                return CommitDetailResponse(
+                    commit=CommitInfo(
+                        commit_id=item.get("commit_hash", commit_id),
+                        title=item.get("subject", ""),
+                        message=item.get("body", ""),
+                        author=item.get("author", ""),
+                        date=item.get("date", ""),
+                        subsystem=item.get("subsystem", "unknown"),
+                        bug_type=item.get("bug_type", "unknown"),
+                        files_changed=item.get("files_changed", []),
+                    ),
+                    related_commits=[],
+                )
+        raise HTTPException(status_code=404, detail=f"Commit {commit_id} 不存在于向量库中")
+
+    # Mock 降级
     commit = _COMMIT_MAP.get(commit_id)
     if not commit:
         raise HTTPException(status_code=404, detail=f"Commit {commit_id} 不存在")
 
-    # 找相关 commit (通过 Fixes 标签)
     related = []
     for fix_tag in commit.get("fix_tags", []):
         for c in _MOCK_COMMITS:
@@ -195,6 +310,11 @@ async def get_commit_detail(commit_id: str) -> CommitDetailResponse:
 @router.get("/subsystems/list", response_model=list[str])
 async def list_subsystems() -> list[str]:
     """列出所有内核子系统"""
+    if _is_index_ready():
+        from ...knowledge.subsystem_graph import get_all_subsystems
+        subs = get_all_subsystems()
+        if subs:
+            return sorted(subs)
     subsystems = sorted(set(c["subsystem"] for c in _MOCK_COMMITS))
     return subsystems
 
@@ -202,6 +322,11 @@ async def list_subsystems() -> list[str]:
 @router.get("/bug-types/list", response_model=list[str])
 async def list_bug_types() -> list[str]:
     """列出所有 Bug 类型"""
+    if _is_index_ready():
+        from ...knowledge.bug_patterns import get_all_bug_types
+        types = get_all_bug_types()
+        if types:
+            return sorted(types)
     bug_types = sorted(set(
         c["bug_type"] for c in _MOCK_COMMITS if c.get("bug_type")
     ))

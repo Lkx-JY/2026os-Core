@@ -115,22 +115,19 @@ class FAISSBackend:
         self._vectors_np: Optional[np.ndarray] = None  # 纯 numpy 降级时的向量存储
 
     def _ensure_index(self, n_total: int = 0):
-        """确保索引已初始化"""
+        """确保索引已初始化
+
+        FAISS 本地模式始终使用 IndexFlatIP (精确检索，无需训练)。
+        IVF 索引仅用于 Milvus 生产模式。
+        """
         if self.index is not None:
             return
 
         try:
             import faiss
-
-            if self.index_type == "flat":
-                self.index = faiss.IndexFlatIP(self.dim)
-            elif self.index_type == "ivf":
-                # IVF 需要训练，先创建 flat 索引后续可升级
-                nlist = min(int(np.sqrt(max(n_total, 10000))), 65536)
-                quantizer = faiss.IndexFlatIP(self.dim)
-                self.index = faiss.IndexIVFFlat(quantizer, self.dim, nlist)
-            else:
-                self.index = faiss.IndexFlatIP(self.dim)
+            # ★ FAISS 本地模式始终使用 FlatIP (精确内积搜索)
+            # 对于开发测试和小规模验证场景，FlatIP 足够快且无需训练
+            self.index = faiss.IndexFlatIP(self.dim)
 
         except ImportError:
             # FAISS 不可用时的纯 numpy 降级实现
@@ -291,13 +288,24 @@ class FAISSBackend:
             except Exception as e:
                 print(f"Warning: Failed to save FAISS index: {e}")
 
-        # 保存元数据
+        # 保存元数据 (处理 set 等不可 JSON 序列化的类型)
+        def _make_serializable(obj):
+            if isinstance(obj, dict):
+                return {str(k): _make_serializable(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple)):
+                return [_make_serializable(v) for v in obj]
+            if isinstance(obj, set):
+                return list(obj)
+            if isinstance(obj, (str, int, float, bool)) or obj is None:
+                return obj
+            return str(obj)
+
         with open(f"{path}.meta.json", "w") as f:
             json.dump({
                 "dim": self.dim,
                 "index_type": self.index_type,
                 "id_counter": self._id_counter,
-                "metadata": self.metadata_store,
+                "metadata": _make_serializable(self.metadata_store),
             }, f, ensure_ascii=False, indent=2)
 
     def load(self, path: str):
@@ -373,33 +381,48 @@ class MilvusBackend:
     def connect(self, timeout: int = 3) -> bool:
         """建立 Milvus 连接
 
+        添加真实连接验证: 通过 list_collections 确认服务器可达,
+        避免 "连接成功但服务器不可用" 的假象。
+
         Args:
             timeout: 连接超时秒数
 
         Returns:
-            bool: 连接是否成功
+            bool: 连接是否成功且服务器可达
         """
         if self._connected:
             return True
 
         try:
-            from pymilvus import connections
+            from pymilvus import connections, MilvusClient as PyMilvusClient
+
+            # 尝试用新版 MilvusClient 验证连通性
             try:
-                connections.connect(
-                    alias="default",
-                    host=self.host,
-                    port=self.port,
-                    timeout=timeout,
-                )
+                import asyncio
+                uri = f"http://{self.host}:{self.port}"
+                client = PyMilvusClient(uri=uri, timeout=timeout)
+                # 验证服务器是否真实可达 (新版本 list_collections 是 async)
+                asyncio.run(client.list_collections())
             except Exception:
-                # 兼容旧版本 pymilvus 或特殊配置
-                pass
+                # 新版 API 不可用, 尝试旧版
+                try:
+                    connections.connect(
+                        alias="default",
+                        host=self.host,
+                        port=self.port,
+                        timeout=timeout,
+                    )
+                    from pymilvus import utility
+                    utility.list_collections()
+                except Exception:
+                    # Milvus 服务不可达
+                    return False
+
             self._connected = True
             return True
         except ImportError:
             return False
         except Exception:
-            # 连接失败不打印错误 — auto 模式下这是预期行为
             return False
 
     def disconnect(self):
@@ -822,34 +845,109 @@ class MilvusClient:
         self.backend_type = backend
         self.dim = dim
         self.faiss_index_path = faiss_index_path
+        self.collection_name = collection_name
 
         self._milvus = MilvusBackend(host, port, collection_name)
         self._faiss = FAISSBackend(dim=dim)
         self._active_backend: Optional[str] = None
 
+        # Milvus Lite 客户端（本地文件模式）
+        self._milvus_lite_client = None
+        self._milvus_lite_path = None
+
         # 确定活跃后端
         self._resolve_backend()
 
     def _resolve_backend(self):
-        """解析使用哪个后端"""
+        """解析使用哪个后端
+
+        优先级:
+        1. 环境变量 MILVUS_FORCE_FAISS=1 → 强制 FAISS
+        2. Milvus Lite 本地数据库 (MILVUS_DB_PATH 环境变量或默认路径)
+        3. backend_type="faiss" → FAISS
+        4. backend_type="milvus" → 先试 Milvus Docker, 不可用则试 Milvus Lite
+        5. auto → Milvus Lite > Milvus Docker > FAISS
+        """
+        force_faiss = os.environ.get("MILVUS_FORCE_FAISS", "").strip() in ("1", "true", "yes")
+
+        if force_faiss:
+            self._active_backend = BackendType.FAISS
+            print("FAISS 模式 (MILVUS_FORCE_FAISS=1)")
+            self._try_load_faiss()
+            return
+
         if self.backend_type == BackendType.FAISS:
             self._active_backend = BackendType.FAISS
-        elif self.backend_type == BackendType.MILVUS:
-            if self._milvus.connect(timeout=3):
-                self._active_backend = BackendType.MILVUS
-            else:
-                print("Warning: Milvus unavailable, falling back to FAISS")
-                self._active_backend = BackendType.FAISS
-        else:  # auto
-            if self._milvus.connect(timeout=3):
-                self._active_backend = BackendType.MILVUS
-            else:
-                self._active_backend = BackendType.FAISS
+            self._try_load_faiss()
+            return
 
-        # 尝试加载已有的 FAISS 索引
-        if self._active_backend == BackendType.FAISS:
-            if os.path.exists(f"{self.faiss_index_path}.meta.json"):
-                self._faiss.load(self.faiss_index_path)
+        # ── 尝试 Milvus Lite (本地文件模式) ──────────────
+        milvus_db_path = os.environ.get(
+            "MILVUS_DB_PATH",
+            "data/milvus_lite.db",
+        )
+        if self._try_milvus_lite(milvus_db_path):
+            return
+
+        # ── 尝试 Milvus Docker (生产模式) ──────────────
+        if self.backend_type == BackendType.MILVUS or self.backend_type == BackendType.AUTO:
+            if self._milvus.connect(timeout=3):
+                self._active_backend = BackendType.MILVUS
+                print(f"Milvus Docker 模式 ({self._milvus.host}:{self._milvus.port})")
+                return
+            else:
+                print("Info: Milvus Docker 不可达 (localhost:19530)")
+
+        # ── 回退到 FAISS ─────────────────────────────────
+        self._active_backend = BackendType.FAISS
+        print("Auto → FAISS 模式 (Milvus 不可达)")
+        self._try_load_faiss()
+
+    def _try_milvus_lite(self, db_path: str) -> bool:
+        """尝试使用 Milvus Lite (嵌入式本地文件模式)
+
+        优点:
+        - 无需 Docker，零配置
+        - 与 FAISS 兼容的本地接口
+        - 支持全部 Milvus API
+
+        Returns:
+            bool: 是否成功切换到 Milvus Lite
+        """
+        try:
+            from pymilvus import MilvusClient as PyMilvusClient
+
+            # 确保父目录存在
+            import os as _os
+            db_dir = _os.path.dirname(db_path)
+            if db_dir:
+                _os.makedirs(db_dir, exist_ok=True)
+
+            # 测试连接：创建 MilvusClient 本地文件实例
+            test_client = PyMilvusClient(db_path)
+            # 尝试执行基本操作验证可用
+            test_client.list_collections()
+
+            # 连接成功，保存引用
+            self._milvus_lite_client = test_client
+            self._milvus_lite_path = db_path
+            self._active_backend = BackendType.MILVUS
+            print(f"Milvus Lite 模式 (本地文件: {db_path})")
+            return True
+
+        except ImportError:
+            # Milvus Lite 未安装 (pymilvus >= 2.4.0 内置)
+            print("Info: Milvus Lite 不可用 (需要 pymilvus >= 2.4.0)")
+            return False
+        except Exception as e:
+            print(f"Info: Milvus Lite 连接失败: {e}")
+            return False
+
+    def _try_load_faiss(self):
+        """尝试加载已有的 FAISS 索引"""
+        if os.path.exists(f"{self.faiss_index_path}.meta.json"):
+            self._faiss.load(self.faiss_index_path)
+            print(f"  已加载 FAISS 索引: {self._faiss.count()} 条向量")
 
     @property
     def active_backend(self) -> str:
@@ -867,6 +965,27 @@ class MilvusClient:
         """创建 Collection / 初始化索引"""
         dim = dim or self.dim
 
+        # ── Milvus Lite 模式 ─────────────────────────────
+        if self._milvus_lite_client is not None:
+            try:
+                if drop_if_exists and self._milvus_lite_client.has_collection(self.collection_name):
+                    self._milvus_lite_client.drop_collection(self.collection_name)
+
+                if not self._milvus_lite_client.has_collection(self.collection_name):
+                    # Milvus Lite 支持 metric_type: "COSINE", "L2", "IP"
+                    self._milvus_lite_client.create_collection(
+                        collection_name=self.collection_name,
+                        dimension=dim,
+                        metric_type="COSINE",
+                        auto_id=True,
+                    )
+                    print(f"Milvus Lite collection '{self.collection_name}' created (dim={dim})")
+                return
+            except Exception as e:
+                print(f"Milvus Lite create_collection error: {e}")
+                return
+
+        # ── Milvus Docker 模式 ───────────────────────────
         if self._active_backend == BackendType.MILVUS:
             self._milvus.create_collection(
                 dim=dim,
@@ -884,6 +1003,39 @@ class MilvusClient:
         batch_size: int = 1000,
     ) -> List[int]:
         """插入向量和元数据"""
+        # ── Milvus Lite 模式 ─────────────────────────────
+        if self._milvus_lite_client is not None:
+            try:
+                vectors = np.asarray(vectors, dtype=np.float32)
+                n = vectors.shape[0]
+                if n == 0:
+                    return []
+
+                # row-wise list-of-dicts 格式
+                data = []
+                for i in range(n):
+                    row = {
+                        "vector": vectors[i].tolist(),
+                        "commit_hash": str(metadata[i].get("commit_hash", ""))[:64] if i < len(metadata) else "",
+                        "subject": str(metadata[i].get("subject", ""))[:512] if i < len(metadata) else "",
+                        "subsystem": str(metadata[i].get("subsystem", "unknown"))[:64] if i < len(metadata) else "unknown",
+                        "bug_type": str(metadata[i].get("bug_type", "unknown"))[:64] if i < len(metadata) else "unknown",
+                        "author": str(metadata[i].get("author", ""))[:128] if i < len(metadata) else "",
+                        "date": str(metadata[i].get("date", ""))[:32] if i < len(metadata) else "",
+                        "score": float(metadata[i].get("score", 0.0)) if i < len(metadata) else 0.0,
+                    }
+                    data.append(row)
+
+                res = self._milvus_lite_client.insert(
+                    collection_name=self.collection_name,
+                    data=data,
+                )
+                return list(range(res.get("insert_count", n)))
+            except Exception as e:
+                print(f"Milvus Lite insert error: {e}")
+                return []
+
+        # ── Milvus Docker 模式 ───────────────────────────
         if self._active_backend == BackendType.MILVUS:
             return self._milvus.insert(vectors, metadata, batch_size=batch_size)
         else:
@@ -905,6 +1057,44 @@ class MilvusClient:
         Returns:
             SearchResult 对象
         """
+        t0 = time.time()
+
+        # ── Milvus Lite 模式 ─────────────────────────────
+        if self._milvus_lite_client is not None:
+            try:
+                query = np.asarray(query_vector, dtype=np.float32).tolist()
+
+                results = self._milvus_lite_client.search(
+                    collection_name=self.collection_name,
+                    data=[query],
+                    limit=top_k,
+                    output_fields=["commit_hash", "subject", "subsystem",
+                                   "bug_type", "author", "date", "score"],
+                )
+
+                elapsed_ms = (time.time() - t0) * 1000
+
+                if not results or len(results) == 0:
+                    return SearchResult(search_time_ms=elapsed_ms)
+
+                hits = results[0]
+                ids = [hit.get("id", i) for i, hit in enumerate(hits)]
+                distances = [hit.get("distance", 0.0) for hit in hits]
+                metas = [{k: v for k, v in hit.items() if k != "vector"}
+                         for hit in hits]
+
+                return SearchResult(
+                    ids=ids,
+                    distances=distances,
+                    metadata=metas,
+                    search_time_ms=elapsed_ms,
+                )
+            except Exception as e:
+                elapsed_ms = (time.time() - t0) * 1000
+                print(f"Milvus Lite search error: {e}")
+                return SearchResult(search_time_ms=elapsed_ms)
+
+        # ── Milvus Docker 模式 ───────────────────────────
         if self._active_backend == BackendType.MILVUS:
             return self._milvus.search(
                 query_vector, top_k=top_k, filter_expr=filter_expr,
@@ -918,21 +1108,51 @@ class MilvusClient:
         """持久化索引"""
         if self._active_backend == BackendType.FAISS:
             self._faiss.save(self.faiss_index_path)
+        # Milvus Lite 自动持久化到文件
 
     def count(self) -> int:
         """返回索引总数"""
+        # Milvus Lite
+        if self._milvus_lite_client is not None:
+            try:
+                stats = self._milvus_lite_client.get_collection_stats(self.collection_name)
+                return stats.get("row_count", 0)
+            except Exception:
+                return 0
+
         if self._active_backend == BackendType.MILVUS:
             return self._milvus.count()
         return self._faiss.count()
 
     def get_stats(self) -> Dict[str, Any]:
         """获取索引统计信息"""
+        # Milvus Lite
+        if self._milvus_lite_client is not None:
+            try:
+                stats = self._milvus_lite_client.get_collection_stats(self.collection_name)
+                return {
+                    "backend": "milvus_lite",
+                    "db_path": self._milvus_lite_path,
+                    "collection_name": self.collection_name,
+                    "total_vectors": stats.get("row_count", 0),
+                    "connected": True,
+                }
+            except Exception:
+                return {"backend": "milvus_lite", "connected": False}
+
         if self._active_backend == BackendType.MILVUS:
             return self._milvus.get_stats()
         return self._faiss.get_stats()
 
     def collection_exists(self) -> bool:
         """检查 Collection/索引是否存在"""
+        # Milvus Lite
+        if self._milvus_lite_client is not None:
+            try:
+                return self._milvus_lite_client.has_collection(self.collection_name)
+            except Exception:
+                return False
+
         if self._active_backend == BackendType.MILVUS:
             return self._milvus.collection_exists()
         return self._faiss.count() > 0

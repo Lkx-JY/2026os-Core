@@ -3,10 +3,12 @@ app:
   version: "1.0.0"
 
 database:
-  type: "milvus"
-  host: "localhost"
-  port: 19530
+  type: "milvus"              # milvus (Milvus Lite 本地文件) | milvus-docker (Docker 生产模式)
+  host: "localhost"            # Docker 模式下的主机
+  port: 19530                  # Docker 模式下的端口
   collection_name: "linux_commits"
+  # Milvus Lite 本地数据库路径 (由 MILVUS_DB_PATH 环境变量指定)
+  milvus_db_path: "data/milvus_lite.db"
 
 redis:
   host: "localhost"
@@ -19,10 +21,13 @@ model:
   reranker: "BAAI/bge-reranker-v2-m3"
 
 llm:
+  # ★ API Key 由环境变量 OPENAI_API_KEY 配置（用户自行承担费用）
+  # 启动时自动检查，未配置则报错退出
+  # 获取地址: https://platform.deepseek.com/api_keys
   provider: "deepseek"
   model: "deepseek-chat"
-  api_key: ""
-  base_url: ""
+  api_key: ""       # 已废弃 — 请使用环境变量 OPENAI_API_KEY
+  base_url: ""       # 已废弃 — 请使用环境变量 OPENAI_BASE_URL (默认 deepseek)
 
 server:
   host: "0.0.0.0"

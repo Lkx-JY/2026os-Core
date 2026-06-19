@@ -336,14 +336,12 @@ def _call_llm(prompt: str, model_name: str) -> str:
     """调用 LLM API"""
     try:
         from openai import OpenAI
+        from ...common.config import get_llm_api_key, get_llm_base_url
 
-        # 尝试多种配置
-        client_kwargs = {
-            "api_key": "sk-placeholder",  # 需要用户配置
-            "base_url": "https://api.deepseek.com/v1",
-        }
-
-        client = OpenAI(**client_kwargs)
+        client = OpenAI(
+            api_key=get_llm_api_key(),
+            base_url=get_llm_base_url(),
+        )
         response = client.chat.completions.create(
             model=model_name,
             messages=[{"role": "user", "content": prompt}],

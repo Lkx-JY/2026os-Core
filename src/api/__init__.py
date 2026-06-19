@@ -31,6 +31,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"Embedding model: {config.get('model', {}).get('embedding', 'N/A')}")
     logger.info(f"Vector DB: {config.get('database', {}).get('type', 'N/A')}")
 
+    # ★ API Key 检查 ─────────────────────────────────
+    _check_api_key_on_startup()
+
     # 初始化日志系统
     setup_logging(
         log_dir="logs",
@@ -46,6 +49,61 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # ── 关闭 ────────────────────────────────────────
     logger.info("Core.LinuxCommit API Server shutting down...")
+
+
+def _check_api_key_on_startup():
+    """启动时检查 API Key 配置
+
+    跳过检查的场景:
+    - SKIP_API_KEY_CHECK=1 环境变量 (用于本地测试)
+    - OPENAI_API_KEY 已正确配置
+
+    Raises:
+        ValueError: 如果未配置 API Key 且未跳过检查
+    """
+    import os
+    import sys
+
+    skip_check = os.environ.get("SKIP_API_KEY_CHECK", "").strip() in ("1", "true", "yes")
+
+    if skip_check:
+        logger.warning("⚠️  SKIP_API_KEY_CHECK=1 — 跳过 API Key 检查")
+        logger.warning("   LLM 相关功能将无法正常使用")
+        return
+
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+
+    if not api_key:
+        error_msg = (
+            "\n"
+            + "=" * 60 + "\n"
+            + "  ❌ 未配置 OPENAI_API_KEY\n"
+            + "=" * 60 + "\n"
+            + "  请设置环境变量 OPENAI_API_KEY 来配置你的 LLM API Key。\n"
+            + "\n"
+            + "  配置方法:\n"
+            + "    1. 临时设置:\n"
+            + "       export OPENAI_API_KEY=sk-your-api-key-here\n"
+            + "\n"
+            + "    2. 永久设置 (~/.bashrc):\n"
+            + "       export OPENAI_API_KEY=sk-your-api-key-here\n"
+            + "\n"
+            + "    3. 使用 .env 文件:\n"
+            + "       创建 .env 文件并写入:\n"
+            + "       OPENAI_API_KEY=sk-your-api-key-here\n"
+            + "\n"
+            + "  💡 API Key 获取: https://platform.deepseek.com/api_keys\n"
+            + "\n"
+            + "  ⚠️  费用说明: 用户自行承担 LLM API 调用费用。\n"
+            + "     本项目不会记录或上传你的 API Key。\n"
+            + "\n"
+            + "  如需跳过检查 (仅本地测试):\n"
+            + "       export SKIP_API_KEY_CHECK=1\n"
+            + "=" * 60 + "\n"
+        )
+        logger.error(error_msg)
+        sys.stderr.write(error_msg)
+        raise ValueError("请配置 OPENAI_API_KEY 环境变量。详见: https://platform.deepseek.com/api_keys")
 
 
 def create_app() -> FastAPI:

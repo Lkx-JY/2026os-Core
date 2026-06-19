@@ -140,10 +140,11 @@ def _call_llm_for_root_cause(
     """调用 LLM API 进行根因分析"""
     try:
         from openai import OpenAI
+        from ...common.config import get_llm_api_key, get_llm_base_url
 
         client = OpenAI(
-            api_key="sk-placeholder",
-            base_url="https://api.deepseek.com/v1",
+            api_key=get_llm_api_key(),
+            base_url=get_llm_base_url(),
         )
         response = client.chat.completions.create(
             model=model_name,

@@ -40,7 +40,7 @@ class LLMClient:
     def __init__(
         self,
         model: str = "deepseek-chat",
-        api_key: str = "sk-placeholder",
+        api_key: str = "",
         base_url: str = "https://api.deepseek.com/v1",
         temperature: float = 0.1,
         max_tokens: int = 4096,
@@ -326,26 +326,31 @@ _llm_client: Optional[LLMClient] = None
 
 
 def get_llm_client(
-    model: str = "deepseek-chat",
-    api_key: str = "sk-placeholder",
-    base_url: str = "https://api.deepseek.com/v1",
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
 ) -> LLMClient:
     """获取/创建全局 LLM 客户端单例
 
+    优先使用传入参数，否则从统一配置中读取。
+    配置来源: 环境变量 OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL
+
     Args:
-        model: 模型名称
-        api_key: API Key
-        base_url: API Base URL
+        model: 模型名称 (None=从配置读取)
+        api_key: API Key (None=从配置读取)
+        base_url: API Base URL (None=从配置读取)
 
     Returns:
         LLMClient 实例
     """
     global _llm_client
     if _llm_client is None:
+        from ...common.config import get_llm_api_key, get_llm_base_url, get_llm_model
+
         _llm_client = LLMClient(
-            model=model,
-            api_key=api_key,
-            base_url=base_url,
+            model=model or get_llm_model(),
+            api_key=api_key or get_llm_api_key(),
+            base_url=base_url or get_llm_base_url(),
         )
     return _llm_client
 

@@ -346,6 +346,67 @@ def get_few_shot_example(bug_type: str) -> str:
 
 
 # ============================================================================
+# Prompt 模板: RAG 解释生成
+# ============================================================================
+
+def build_rag_explanation_prompt(
+    dmesg_content: str,
+    root_cause: Any,
+    patches: List[Any],
+) -> str:
+    """构造 RAG 解释的 prompt
+
+    用于 LLM 基于检索结果生成完整的分析解释。
+
+    Args:
+        dmesg_content: dmesg 日志内容
+        root_cause: RootCauseInfo 对象
+        patches: MatchedPatch 列表
+
+    Returns:
+        prompt 文本
+    """
+    patches_text = ""
+    for i, patch in enumerate(patches[:5], 1):
+        commit = getattr(patch, 'commit', None)
+        patches_text += f"""  [{i}] {getattr(commit, 'subject', 'N/A')}
+      Commit: {getattr(commit, 'commit_hash', 'N/A')[:12]}
+      Subsystem: {getattr(commit, 'subsystem', 'unknown')}
+      Score: {getattr(patch, 'relevance_score', 0):.3f}
+      Reason: {getattr(patch, 'match_reason', '')}
+"""
+
+    if not patches_text:
+        patches_text = "  (No matching patches found)\n"
+
+    return f"""You are a senior Linux kernel crash analyst. Provide a comprehensive explanation based on the following analysis.
+
+## Crash Log (dmesg)
+{dmesg_content[:2000]}
+
+## Root Cause Analysis
+- **Root Cause**: {getattr(root_cause, 'root_cause', 'unknown')}
+- **Subsystem**: {getattr(root_cause, 'subsystem', 'unknown')}
+- **Confidence**: {getattr(root_cause, 'confidence', 0):.1%}
+- **Summary**: {getattr(root_cause, 'summary', '')}
+- **Key Symptoms**: {', '.join(getattr(root_cause, 'key_symptoms', []))}
+
+## Recommended Patches
+{patches_text}
+
+## Task
+Write a comprehensive analysis explanation in Chinese that includes:
+
+1. **Crash Overview** - A brief summary of what happened
+2. **Root Cause Explanation** - Detailed explanation of the root cause
+3. **Patch Recommendations** - Explain why each recommended patch is relevant
+4. **Fix Strategy** - What needs to be done to fix this issue
+5. **Prevention Suggestions** - How to prevent similar issues
+
+Write in a clear, technical yet accessible style. Use English technical terms where appropriate."""
+
+
+# ============================================================================
 # Prompt 工具函数
 # ============================================================================
 
@@ -423,6 +484,8 @@ __all__ = [
     # 报告生成
     "build_diagnosis_report_prompt",
     "build_patch_explanation_prompt",
+    # RAG 解释
+    "build_rag_explanation_prompt",
     # 因果推理
     "build_causal_reasoning_prompt",
     # 根因分析

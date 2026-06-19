@@ -479,6 +479,11 @@ def get_detection_tools(bug_type: str) -> List[str]:
     return []
 
 
+def get_all_bug_types() -> List[str]:
+    """获取所有已知 Bug 类型列表"""
+    return sorted(BUG_PATTERNS.keys())
+
+
 def list_bug_patterns(category: Optional[str] = None) -> List[Dict[str, Any]]:
     """列出所有 Bug 模式
 
@@ -589,6 +594,7 @@ __all__ = [
     "get_fix_patterns",
     "get_search_keywords",
     "get_detection_tools",
+    "get_all_bug_types",
     "list_bug_patterns",
     "search_bug_by_symptom",
     "generate_bug_context_for_llm",
