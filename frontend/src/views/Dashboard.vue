@@ -132,12 +132,12 @@ import { useRouter } from 'vue-router'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
 import { PieChart, BarChart } from 'echarts/charts'
-import { TitleComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import { TitleComponent, TooltipComponent, LegendComponent, GridComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { useStatsStore } from '@/stores/stats'
 import { formatDuration, formatRelativeTime } from '@/utils/format'
 
-use([PieChart, BarChart, TitleComponent, TooltipComponent, LegendComponent, CanvasRenderer])
+use([PieChart, BarChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent, CanvasRenderer])
 
 const router = useRouter()
 const statsStore = useStatsStore()
