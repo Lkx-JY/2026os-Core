@@ -13,11 +13,21 @@ services:
       - REDIS_HOST=redis
   
   milvus:
-    image: milvusdb/milvus:latest
+    image: milvusdb/milvus:v2.4.0   # 锁定版本，避免 latest 漂移
     ports:
       - "19530:19530"
-  
+    volumes:
+      - milvus_data:/var/lib/milvus  # 持久化向量数据
+    environment:
+      - MILVUS_STANDALONE=1          # 内嵌 etcd + 本地存储
+
   redis:
-    image: redis:alpine
+    image: redis:7-alpine
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data             # 持久化任务状态
+
+volumes:                             # 命名卷
+  milvus_data:
+  redis_data:

@@ -49,8 +49,8 @@ def parse_args():
     )
     parser.add_argument(
         "--repo-path",
-        default="/home/lkx/文档/内核比赛/linux",
-        help="Linux 内核 Git 仓库路径 (默认: /home/lkx/文档/内核比赛/linux)",
+        required=True,
+        help="Linux 内核 Git 仓库路径 (必填，例如: /path/to/linux)",
     )
     parser.add_argument(
         "--batch-size",

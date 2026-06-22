@@ -15,7 +15,9 @@
 """
 
 from typing import List, Dict, Any, Optional, Tuple
+import re
 from ..models import CrashFeature, RootCauseResult
+from ...common.taxonomy import normalize_bug_type
 
 
 # ============================================================================
@@ -1075,7 +1077,6 @@ class RootCauseAnalyzer:
             # 1) panic_patterns 精确匹配 (最高权重)
             for pattern in rule.get("panic_patterns", []):
                 if pattern and feature.panic_msg:
-                    import re
                     if re.search(pattern, feature.panic_msg, re.IGNORECASE):
                         score = 0.95
                         match_type = f"panic_pattern:{pattern[:50]}"
@@ -1203,7 +1204,6 @@ class RootCauseAnalyzer:
             (r"oom|out.?of.?memory", "Possible OOM", "Panic 消息包含 OOM 关键词", 0.50),
         ]
 
-        import re
         for pattern, name, desc, score in panic_hints:
             if re.search(pattern, msg_lower):
                 return (name, desc, score)
@@ -1400,6 +1400,9 @@ class RootCauseAnalyzer:
         )
         result.retrieval_query = retrieval_query
         result.suggested_keywords = fix_hints.get("suggested_search_keywords", [])
+
+        # 标准化 bug_type，确保与 taxonomy 一致
+        result.bug_type = normalize_bug_type(result.bug_type).value
 
         return result
 

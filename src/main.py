@@ -9,8 +9,8 @@ Usage:
 import os
 import sys
 
-# 确保项目根目录在 sys.path 中
-_project_root = os.path.dirname(os.path.abspath(__file__))
+# 确保项目根目录 (src/ 的父目录) 在 sys.path 中
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
@@ -24,12 +24,13 @@ def main():
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", "8000"))
     reload = os.environ.get("RELOAD", "true").lower() == "true"
+    log_level = os.environ.get("LOG_LEVEL", "info")
 
-    # ★ 启动前检查 API Key
+    # ★ 启动前检查 API Key（委托给 config 模块的统一检查）
     skip_check = os.environ.get("SKIP_API_KEY_CHECK", "").strip() in ("1", "true", "yes")
     if not skip_check:
-        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-        if not api_key:
+        from src.common.config import is_api_key_configured
+        if not is_api_key_configured():
             print("""
 ╔══════════════════════════════════════════════════════════╗
 ║  ❌ 未配置 OPENAI_API_KEY                               ║
@@ -63,7 +64,7 @@ def main():
         host=host,
         port=port,
         reload=reload,
-        log_level="info",
+        log_level=log_level,
     )
 
 

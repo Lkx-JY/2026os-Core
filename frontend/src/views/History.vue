@@ -50,7 +50,7 @@
         :data="taskList"
         style="width: 100%"
         @row-click="viewTask"
-        v-loading="false"
+        v-loading="loading"
         empty-text="暂无分析记录"
       >
         <el-table-column label="任务 ID" width="180">
@@ -70,7 +70,7 @@
         <el-table-column label="日志预览" min-width="250">
           <template #default="{ row }">
             <span class="text-muted text-sm">
-              {{ truncateText(row.request?.log_content || '', 60) }}
+              {{ truncateText(row.log_preview || row.request?.log_content || '', 60) }}
             </span>
           </template>
         </el-table-column>
@@ -168,10 +168,12 @@ import {
   formatDateTime, formatPercent, formatDuration,
 } from '@/utils/format'
 import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 
 const router = useRouter()
 const analysisStore = useAnalysisStore()
 
+const loading = ref(false)  // 配合 v-loading 使用，数据从 store 同步加载无需异步
 const detailVisible = ref(false)
 const detailTask = ref(null)
 
@@ -183,7 +185,7 @@ const failedCount = computed(() =>
 )
 
 const renderedDetailExplanation = computed(() => {
-  return marked(detailTask.value?.result?.llm_explanation || '')
+  return DOMPurify.sanitize(marked(detailTask.value?.result?.llm_explanation || ''))
 })
 
 function truncateText(text, maxLen) {

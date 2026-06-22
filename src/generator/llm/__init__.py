@@ -98,6 +98,7 @@ class LLMClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         retry_on_failure: bool = True,
+        model: Optional[str] = None,
     ) -> str:
         """发送聊天请求并返回响应文本
 
@@ -107,6 +108,7 @@ class LLMClient:
             temperature: 覆盖默认温度
             max_tokens: 覆盖默认最大 token
             retry_on_failure: 失败时是否重试
+            model: 覆盖默认模型（None 时使用实例配置的模型）
 
         Returns:
             LLM 生成的文本
@@ -119,6 +121,7 @@ class LLMClient:
 
         temp = temperature if temperature is not None else self.temperature
         max_tok = max_tokens if max_tokens is not None else self.max_tokens
+        effective_model = model or self.model
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -133,7 +136,7 @@ class LLMClient:
         for attempt in range(self.max_retries if retry_on_failure else 1):
             try:
                 response = client.chat.completions.create(
-                    model=self.model,
+                    model=effective_model,
                     messages=messages,  # type: ignore
                     temperature=temp,
                     max_tokens=max_tok,

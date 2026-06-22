@@ -66,11 +66,14 @@ export const useAnalysisStore = defineStore('analysis', () => {
   }
 
   function startPolling(taskId) {
-    let attempts = 0
+    let attempts = 0       // 总轮询次数
+    let errorCount = 0     // 连续错误次数（成功后重置）
 
     const poll = async () => {
       try {
         const status = await analysisApi.getStatus(taskId)
+
+        errorCount = 0  // 成功调用，重置连续错误计数
 
         if (tasks.value[taskId]) {
           tasks.value[taskId].status = status.status
@@ -80,22 +83,26 @@ export const useAnalysisStore = defineStore('analysis', () => {
           if (status.status === 'completed') {
             tasks.value[taskId].result = status.result
             stopPolling(taskId)
+            return
           } else if (status.status === 'failed') {
             stopPolling(taskId)
+            return
           }
         }
       } catch (err) {
-        attempts++
-        if (attempts >= 5) {
+        errorCount++
+        if (errorCount >= 5) {
           stopPolling(taskId)
           if (tasks.value[taskId]) {
             tasks.value[taskId].status = 'failed'
             tasks.value[taskId].error = '轮询失败: 无法获取任务状态'
           }
+          return
         }
       }
 
-      if (++attempts >= MAX_POLL_ATTEMPTS) {
+      attempts++
+      if (attempts >= MAX_POLL_ATTEMPTS) {
         stopPolling(taskId)
         if (tasks.value[taskId] && tasks.value[taskId].status === 'running') {
           tasks.value[taskId].status = 'failed'

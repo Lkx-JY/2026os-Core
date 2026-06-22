@@ -8,20 +8,14 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from ..schemas.requests import SearchRequest
 from ..schemas.responses import SearchResponse, CommitDetailResponse
 from ..schemas.entities import CommitInfo
-from ..dependencies import get_config
+from ..dependencies import get_config, check_index_ready
 from ...common.logging import get_logger
 
 logger = get_logger()
 router = APIRouter(prefix="/search", tags=["Search"])
 
-
-def _is_index_ready() -> bool:
-    """检查向量库是否可用"""
-    try:
-        from ...indexer.milvus import get_milvus_client
-        return get_milvus_client().count() > 0
-    except Exception:
-        return False
+# ★ 复用 shared dependency 中的 index ready 检查
+_is_index_ready = check_index_ready
 
 
 def _search_real(query: str, top_k: int = 50,
@@ -195,10 +189,11 @@ async def search_commits(
     using_real = _is_index_ready()
     if using_real:
         logger.info(f"使用真实向量检索: query='{request.query}'")
-        # ★ 真实向量检索
+        # ★ 真实向量检索 (使用用户指定的 top_k，默认 200)
+        effective_top_k = max(request.top_k, 100) if request.top_k else 200
         all_results = _search_real(
             query=request.query,
-            top_k=200,
+            top_k=effective_top_k,
             subsystem=request.subsystem,
             bug_type=request.bug_type,
         )
@@ -268,15 +263,34 @@ async def search_commits(
 @router.get("/{commit_id}", response_model=CommitDetailResponse)
 async def get_commit_detail(commit_id: str) -> CommitDetailResponse:
     """获取单个 Commit 的详细信息"""
-    # 优先从向量库查找
+    # 优先从向量库查找 — 通过标量过滤精确匹配 commit_hash
     if _is_index_ready():
         from ...indexer.milvus import get_milvus_client
-        from ...indexer.embedding import encode_text
         client = get_milvus_client()
-        query_vec = encode_text([commit_id])[0]
-        result = client.search(query_vec, top_k=5)
-        for item in result.to_dict_list():
-            if item.get("commit_hash") == commit_id:
+        try:
+            # 使用标量过滤做精确 ID 匹配，而非向量近似搜索
+            result = client.get_by_id(commit_id)
+            if result:
+                return CommitDetailResponse(
+                    commit=CommitInfo(
+                        commit_id=result.get("commit_hash", commit_id),
+                        title=result.get("subject", ""),
+                        message=result.get("body", ""),
+                        author=result.get("author", ""),
+                        date=result.get("date", ""),
+                        subsystem=result.get("subsystem", "unknown"),
+                        bug_type=result.get("bug_type", "unknown"),
+                        files_changed=result.get("files_changed", []),
+                    ),
+                    related_commits=[],
+                )
+        except AttributeError:
+            # get_by_id 不可用时回退到标量过滤搜索
+            filter_expr = f'commit_hash == "{commit_id}"'
+            results = client.search_with_filter(filter_expr=filter_expr, top_k=1)
+            items = results.to_dict_list() if hasattr(results, 'to_dict_list') else results
+            if items:
+                item = items[0] if isinstance(items, list) else items
                 return CommitDetailResponse(
                     commit=CommitInfo(
                         commit_id=item.get("commit_hash", commit_id),

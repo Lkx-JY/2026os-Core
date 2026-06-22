@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from functools import lru_cache
 
+# 配置缓存大小（1 = 只缓存单例配置结果）
+_CONFIG_CACHE_SIZE = 1
+
 
 # ============================================================================
 # 项目根目录
@@ -87,7 +90,7 @@ def _check_api_key(api_key: Optional[str]) -> str:
 # 配置加载
 # ============================================================================
 
-@lru_cache()
+@lru_cache(maxsize=_CONFIG_CACHE_SIZE)
 def load_yaml_config() -> Dict[str, Any]:
     """加载 config.yaml 配置（带缓存）
 
@@ -113,7 +116,7 @@ def load_yaml_config() -> Dict[str, Any]:
 # 核心配置
 # ============================================================================
 
-@lru_cache()
+@lru_cache(maxsize=_CONFIG_CACHE_SIZE)
 def get_config() -> Dict[str, Any]:
     """获取完整配置（环境变量 + YAML 合并）
 

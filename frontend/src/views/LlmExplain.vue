@@ -19,9 +19,10 @@
       <div class="analysis-form">
         <!-- 输入区域 -->
         <div class="form-group">
-          <el-label class="form-label">分析内容</el-label>
-          <el-textarea
+          <label class="form-label">分析内容</label>
+          <el-input
             v-model="inputContent"
+            type="textarea"
             :rows="8"
             placeholder="请输入需要分析的故障日志、错误信息或问题描述...
 
@@ -29,12 +30,12 @@
 [  123.456789] BUG: kernel NULL pointer dereference, address: 0000000000000028
 [  123.456790] #PF: supervisor read access in kernel mode
 [  123.456791] #PF: error_code(0x0000) - not-present page
-[  123.456792] PGD 0 P4D 0 
+[  123.456792] PGD 0 P4D 0
 [  123.456793] Oops: 0000 [#1] PREEMPT SMP NOPTI
 [  123.456794] CPU: 2 PID: 1234 Comm: kworker/u8:0 Kdump: loaded
 [  123.456795] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.14.0-2.fc34 04/01/2014
 [  123.456796] RIP: 0010:my_function+0x123/0x456
-[  123.456797] Code: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+[  123.456797] Code: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 [  123.456798] RSP: 0018:ffffc90000123456 EFLAGS: 00010202
 [  123.456799] RAX: 0000000000000000 RBX: ffff888000112233 RCX: 0000000000000000
 [  123.456800] RDX: ffff888000445566 RSI: ffff888000778899 RDI: 0000000000000000
@@ -58,7 +59,7 @@
 
         <!-- 分析选项 -->
         <div class="form-group">
-          <el-label class="form-label">分析模式</el-label>
+          <label class="form-label">分析模式</label>
           <div class="mode-options">
             <el-radio-group v-model="analysisMode" class="radio-group">
               <el-radio label="full" border>完整分析</el-radio>
@@ -203,7 +204,13 @@
 
 <script setup>
 import { ref, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { marked } from 'marked'
+import DOMPurify from 'dompurify'
+import { ElMessage } from 'element-plus'
+import { searchApi } from '@/api/search'
+
+const router = useRouter()
 
 // 响应式数据
 const inputContent = ref('')
@@ -212,21 +219,8 @@ const isAnalyzing = ref(false)
 const analysisResult = ref(null)
 const analysisTime = ref('')
 
-// 模拟历史记录
-const recentHistory = ref([
-  {
-    preview: 'BUG: kernel NULL pointer dereference...',
-    time: '2分钟前'
-  },
-  {
-    preview: 'kernel BUG at fs/ext4/inode.c:1234',
-    time: '15分钟前'
-  },
-  {
-    preview: 'WARNING: CPU: 3 PID: 4567 at net/socket.c...',
-    time: '1小时前'
-  }
-])
+// 模拟历史记录（从 localStorage 读取）
+const recentHistory = ref(JSON.parse(localStorage.getItem('llm_history') || '[]'))
 
 // 分析结果摘要
 const resultSummary = computed(() => {
@@ -276,104 +270,78 @@ const relatedPatches = computed(() => {
 // 格式化 Markdown 结果
 const formattedResult = computed(() => {
   if (!analysisResult.value) return ''
-  return marked(analysisResult.value.content || '')
+  return DOMPurify.sanitize(marked(analysisResult.value.content || ''))
 })
 
 // 开始分析
 async function startAnalysis() {
   if (!inputContent.value.trim()) return
-  
+
   isAnalyzing.value = true
-  
-  // 模拟 API 调用延迟
-  await new Promise(resolve => setTimeout(resolve, 2000))
-  
-  // 模拟分析结果
-  analysisResult.value = {
-    fault_type: '空指针解引用',
-    severity: '严重',
-    impact: '系统崩溃',
-    root_cause: '在 my_function 函数中访问了 NULL 指针',
-    suggestions: [
-      '在 my_function+0x123 处添加空指针检查',
-      '验证传入参数的有效性',
-      '添加适当的错误处理和日志记录',
-      '考虑使用 RCU 保护共享数据结构'
-    ],
-    patches: [
-      {
-        commit_id: 'abc1234',
-        title: 'fix: Add NULL check in my_function',
-        summary: '在 my_function 中添加空指针检查，防止内核崩溃',
-        author: 'Linux Kernel Developer',
-        date: '2024-01-15',
-        score: 0.92
-      },
-      {
-        commit_id: 'def5678',
-        title: 'fix: Validate pointer before dereference',
-        summary: '在解引用前验证指针有效性',
-        author: 'Kernel Team',
-        date: '2024-01-10',
-        score: 0.78
-      },
-      {
-        commit_id: 'ghi9012',
-        title: 'fix: Add error handling in my_driver',
-        summary: '为驱动添加完整的错误处理逻辑',
-        author: 'Driver Maintainer',
-        date: '2024-01-08',
-        score: 0.65
-      }
-    ],
-    content: `## 故障分析报告
 
-### 1. 问题识别
+  try {
+    // 调用后端搜索 API 查找匹配的补丁
+    const result = await searchApi.search({
+      query: inputContent.value.trim(),
+      page_size: 5,
+    })
 
-根据提供的内核崩溃日志，系统在 \`my_function+0x123/0x456\` 处发生了 **空指针解引用** 错误。
+    // 将搜索结果映射为分析结果格式
+    const patches = (result.items || result.results || []).map((item) => ({
+      commit_id: item.commit_id || item.commit_hash || 'N/A',
+      title: item.title || item.subject || '未知补丁',
+      summary: (item.message || item.body || '').substring(0, 200),
+      author: item.author || '未知',
+      date: item.date || '',
+      score: item.relevance_score || item.final_score || 0.5,
+    }))
 
-**关键信息：**
-- **错误类型**: \`BUG: kernel NULL pointer dereference\`
-- **访问地址**: \`0x0000000000000028\`
-- **CPU**: 2
-- **进程**: kworker/u8:0 (PID: 1234)
+    analysisResult.value = {
+      fault_type: '内核崩溃',
+      severity: '待评估',
+      impact: '系统稳定性',
+      root_cause: '需要通过日志进一步分析',
+      suggestions: [
+        '检查日志中报告的调用栈，定位问题发生位置',
+        '应用推荐补丁列表中匹配度最高的补丁',
+        '在测试环境中验证补丁修复效果',
+        '确认相关子系统中是否存在其他类似问题',
+      ],
+      patches: patches.length > 0 ? patches : [
+        {
+          commit_id: 'N/A',
+          title: '未找到匹配补丁',
+          summary: '知识库中暂无与此日志匹配的补丁，建议通过 dmesg 模块运行完整的根因分析',
+          author: '',
+          date: '',
+          score: 0,
+        },
+      ],
+      content: `## 搜索结果分析
 
-### 2. 调用链分析
+根据输入内容在 Linux 内核补丁知识库中检索到 **${patches.length}** 个相关补丁。
 
-\`\`\`
-my_function+0x123/0x456
-  └─ my_other_function+0xab/0xcd
-      └─ my_driver_init+0xef/0x100 [my_driver]
-          └─ do_one_initcall+0x45/0x200
-              └─ kernel_init_freeable+0x123/0x234
-                  └─ kernel_init+0xe/0x100
-\`\`\`
+${patches.length > 0 ? '### 匹配的补丁\n\n' + patches.map((p, i) =>
+  `${i + 1}. **${p.title}** (匹配度: ${(p.score * 100).toFixed(0)}%)\n   - 作者: ${p.author}\n   - 日期: ${p.date}\n   - 摘要: ${p.summary}`
+).join('\n\n') : '暂无匹配的补丁。请尝试使用 /analyze 页面上传完整 dmesg 日志进行详细分析。'}`,
+    }
 
-### 3. 根因分析
+    analysisTime.value = new Date().toLocaleString('zh-CN')
 
-从调用链可以看出，问题发生在驱动初始化阶段。\`my_function\` 函数在地址 \`0x28\` 处尝试访问一个 NULL 指针。
-
-**可能原因：**
-- 内存分配失败但未检查返回值
-- 指针在使用前未被正确初始化
-- 并发访问导致指针被释放
-
-### 4. 建议修复方案
-
-1. **添加空指针检查**：在访问指针前验证其有效性
-2. **增强错误处理**：在内存分配失败时返回适当的错误码
-3. **添加调试信息**：增加日志记录以便于问题追踪
-4. **代码审查**：检查相关代码路径的所有边界条件
-
-### 5. 参考资源
-
-- Linux 内核编码规范
-- 相关驱动的维护文档
-- 类似问题的修复补丁`
+    // 保存到历史记录
+    const historyEntry = {
+      preview: inputContent.value.trim().substring(0, 80),
+      time: new Date().toLocaleString('zh-CN'),
+    }
+    recentHistory.value.unshift(historyEntry)
+    if (recentHistory.value.length > 20) recentHistory.value = recentHistory.value.slice(0, 20)
+    localStorage.setItem('llm_history', JSON.stringify(recentHistory.value))
+  } catch (err) {
+    console.error('LLM 分析失败:', err)
+    ElMessage.error('分析请求失败: ' + (err.response?.data?.detail || err.message || '未知错误'))
+  } finally {
+    isAnalyzing.value = false
   }
-  
-  analysisTime.value = new Date().toLocaleString('zh-CN')
-  isAnalyzing.value = false
 }
 
 // 清空输入
@@ -389,8 +357,7 @@ function loadHistory(history) {
 
 // 跳转到补丁详情
 function goToPatchDetail(commitId) {
-  // 导航到知识库页面并搜索该补丁
-  window.location.href = `/knowledge?search=${commitId}`
+  router.push({ path: '/knowledge', query: { search: commitId } })
 }
 </script>
 

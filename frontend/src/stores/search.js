@@ -72,8 +72,23 @@ export const useSearchStore = defineStore('search', () => {
       ])
       subsystemOptions.value = subsystems.map(s => ({ label: s, value: s }))
       bugTypeOptions.value = bugTypes.map(b => ({ label: b, value: b }))
-    } catch {
-      // 加载失败使用默认值
+    } catch (err) {
+      console.warn('加载过滤选项失败，使用默认值:', err.message || err)
+      // 提供合理的默认回退值，确保 UI 不会空白
+      subsystemOptions.value = [
+        { label: 'mm', value: 'mm' },
+        { label: 'fs', value: 'fs' },
+        { label: 'net', value: 'net' },
+        { label: 'kernel', value: 'kernel' },
+        { label: 'drivers', value: 'drivers' },
+      ]
+      bugTypeOptions.value = [
+        { label: 'use_after_free', value: 'use_after_free' },
+        { label: 'null_pointer_dereference', value: 'null_pointer_dereference' },
+        { label: 'race_condition', value: 'race_condition' },
+        { label: 'deadlock', value: 'deadlock' },
+        { label: 'memory_corruption', value: 'memory_corruption' },
+      ]
     }
   }
 

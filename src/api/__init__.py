@@ -15,7 +15,7 @@ from .middleware import (
     RateLimitMiddleware,
     RequestLoggingMiddleware,
 )
-from .dependencies import load_config
+from .dependencies import load_yaml_config as load_config
 from ..common.logging import setup_logging, get_logger
 
 logger = get_logger()
@@ -28,6 +28,14 @@ _START_TIME = time.time()
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """应用生命周期管理 — 启动时初始化，关闭时清理"""
     # ── 启动 ────────────────────────────────────────
+    # ★ 日志系统必须先初始化，否则后续 logger.info() 不会写入日志文件
+    setup_logging(
+        log_dir="logs",
+        app_name="CoreLinuxCommit",
+        console_level="INFO",
+        file_level="DEBUG",
+    )
+
     logger.info("=" * 60)
     logger.info("Core.LinuxCommit API Server Starting...")
     logger.info("Loading configuration...")
@@ -37,14 +45,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # ★ API Key 检查 ─────────────────────────────────
     _check_api_key_on_startup()
-
-    # 初始化日志系统
-    setup_logging(
-        log_dir="logs",
-        app_name="CoreLinuxCommit",
-        console_level="INFO",
-        file_level="DEBUG",
-    )
 
     logger.info("API server ready to accept requests")
     logger.info("=" * 60)

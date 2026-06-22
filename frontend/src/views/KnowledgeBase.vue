@@ -235,8 +235,12 @@ const detailVisible = ref(false)
 const detailCommit = ref(null)
 
 function doSearch() {
-  searchStore.page = 1
-  searchStore.doSearch(searchQuery.value)
+  // 新搜索始终从第 1 页开始；setPage 内部也会调用 doSearch，
+  // 但 KnowledgeBase 使用独立的 searchQuery，故分两步操作
+  searchStore.setPage(1)
+  if (searchStore.query !== searchQuery.value) {
+    searchStore.doSearch(searchQuery.value)
+  }
 }
 
 function showDetail(commit) {

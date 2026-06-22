@@ -52,7 +52,7 @@ SUBSYSTEM_PATH_MAP = {
 # 子系统层级关系 (父 → 子)
 SUBSYSTEM_HIERARCHY = {
     "kernel": ["rcu", "cgroup", "bpf", "irq"],
-    "drivers": ["usb", "pci", "nvme", "scsi", "net"],
+    "drivers": ["usb", "pci", "nvme", "scsi"],
     "fs": ["nfs"],
     "arch": ["kvm"],
 }
@@ -92,6 +92,7 @@ class FilterResult:
     """过滤结果"""
     passed: List[Dict[str, Any]] = field(default_factory=list)
     rejected: List[Dict[str, Any]] = field(default_factory=list)
+    uncertain: List[Dict[str, Any]] = field(default_factory=list)  # 无法判断的候选项
     filter_name: str = ""
     reject_reasons: List[str] = field(default_factory=list)
 
@@ -102,6 +103,10 @@ class FilterResult:
     @property
     def reject_count(self) -> int:
         return len(self.rejected)
+
+    @property
+    def uncertain_count(self) -> int:
+        return len(self.uncertain)
 
 
 def filter_by_subsystem(
@@ -213,57 +218,136 @@ def filter_by_kernel_version(
     candidates: List[Dict[str, Any]],
     kernel_version: str,
     version_tolerance: int = 1,
+    strict: bool = False,
 ) -> FilterResult:
     """按内核版本过滤
 
     Linux 内核版本格式: major.minor.patch (如 6.1.0, 5.15.72)
 
+    采用三分类策略:
+    - passed: 版本信息可确认且匹配
+    - rejected: 版本信息可确认但不匹配
+    - uncertain: 无法从提交中提取版本信息（非严格模式保留，严格模式拒绝）
+
     Args:
         candidates: 候选列表
         kernel_version: 目标内核版本
         version_tolerance: 版本容忍度 (允许 ±N 个 minor 版本)
+        strict: 无法判断时直接拒绝而非放入 uncertain
 
     Returns:
         FilterResult
     """
     if not kernel_version:
-        return FilterResult(passed=candidates, filter_name="kernel_version_filter")
+        return FilterResult(passed=candidates, filter_name="kernel_version_filter(no_target)")
 
     try:
         parts = kernel_version.split(".")
         target_major = int(parts[0])
         target_minor = int(parts[1]) if len(parts) > 1 else 0
     except (ValueError, IndexError):
-        return FilterResult(passed=candidates, filter_name="kernel_version_filter")
+        return FilterResult(passed=candidates, filter_name="kernel_version_filter(bad_format)")
 
     passed = []
     rejected = []
+    uncertain = []
     for cand in candidates:
-        cand_date = cand.get("date", "")
         cand_subject = cand.get("subject", "")
 
-        # 策略1: 从 subject 中提取版本信息 (如 "6.1", "v5.15")
-        import re
-        ver_match = re.search(r'(?:^|\s)(?:v|linux-)?(\d+)\.(\d+)', cand_subject + cand.get("message", ""))
+        # 策略1: 从 subject 和 body 中提取版本信息 (如 "6.1", "v5.15")
+        cand_body = cand.get("body", "") or cand.get("embedding_text", "") or ""
+        ver_match = re.search(r'(?:^|\s)(?:v|linux-)?(\d+)\.(\d+)', cand_subject + " " + cand_body)
         if ver_match:
             try:
                 cand_major = int(ver_match.group(1))
                 cand_minor = int(ver_match.group(2))
                 if cand_major == target_major and abs(cand_minor - target_minor) <= version_tolerance:
                     passed.append(cand)
-                    continue
+                else:
+                    rejected.append(cand)
+                continue
             except ValueError:
                 pass
 
-        # 策略2: 从日期推断 — 较新的 commit 可能是较新版本
-        # 由于日期→版本映射不可靠，对无版本标记的 commit 采用宽松策略(通过)
-        passed.append(cand)
+        # 策略2: 基于提交日期推断（映射已知内核版本发布日期）
+        compat = _version_from_date_compatible(
+            cand.get("date", ""), target_major, target_minor, version_tolerance
+        )
+        if compat is True:
+            passed.append(cand)
+        elif compat is False:
+            rejected.append(cand)
+        elif strict:
+            rejected.append(cand)
+        else:
+            uncertain.append(cand)
 
     return FilterResult(
         passed=passed,
         rejected=rejected,
-        filter_name=f"kernel_version_filter(target={kernel_version})",
+        uncertain=uncertain,
+        filter_name=f"kernel_version_filter(target={kernel_version}, strict={strict})",
     )
+
+
+# ── 内核版本发布日期映射（辅助 filter_by_kernel_version 策略2）────
+_KERNEL_RELEASE_DATES: Dict[tuple, str] = {
+    (6, 12): "2024-12-01", (6, 11): "2024-09-15", (6, 10): "2024-07-14",
+    (6, 9):  "2024-05-12", (6, 8):  "2024-03-10", (6, 7):  "2024-01-07",
+    (6, 6):  "2023-10-29", (6, 5):  "2023-08-27", (6, 4):  "2023-06-25",
+    (6, 3):  "2023-04-23", (6, 2):  "2023-02-19", (6, 1):  "2022-12-11",
+    (6, 0):  "2022-10-02",
+    (5, 19): "2022-07-31", (5, 18): "2022-05-22", (5, 17): "2022-03-20",
+    (5, 16): "2022-01-09", (5, 15): "2021-10-31", (5, 14): "2021-08-29",
+    (5, 13): "2021-06-27", (5, 12): "2021-04-25", (5, 11): "2021-02-14",
+    (5, 10): "2020-12-13", (5, 9):  "2020-10-11", (5, 8):  "2020-08-02",
+    (5, 7):  "2020-05-31", (5, 6):  "2020-03-29", (5, 5):  "2020-01-26",
+    (5, 4):  "2019-11-24", (5, 3):  "2019-09-15", (5, 2):  "2019-07-07",
+    (5, 1):  "2019-05-05", (5, 0):  "2019-03-03",
+    (4, 20): "2018-12-23", (4, 19): "2018-10-22", (4, 18): "2018-08-12",
+    (4, 17): "2018-06-03", (4, 16): "2018-04-01", (4, 15): "2018-01-28",
+    (4, 14): "2017-11-12", (4, 13): "2017-09-03", (4, 12): "2017-07-02",
+    (4, 11): "2017-04-30", (4, 10): "2017-02-19", (4, 9):  "2016-12-11",
+}
+
+
+def _version_from_date_compatible(
+    date_str: str,
+    target_major: int,
+    target_minor: int,
+    tolerance: int,
+) -> Optional[bool]:
+    """基于提交日期判断是否可能与目标内核版本兼容。
+
+    Returns:
+        True:  提交对应的版本 ≤ 目标版本+容差 → 可能兼容
+        False: 提交远新于目标 → 不兼容
+        None:  无法解析日期或提交早于所有已知版本
+    """
+    if not date_str:
+        return None
+    try:
+        commit_date = date_str[:10]  # YYYY-MM-DD
+        # 找到提交日期对应的最新内核版本
+        closest = None
+        for (maj, min_), rel_date in sorted(_KERNEL_RELEASE_DATES.items(), reverse=True):
+            if rel_date <= commit_date:
+                closest = (maj, min_)
+                break
+        if closest is None:
+            return None  # 提交日期早于已知的最早版本
+
+        c_major, c_minor = closest
+        if c_major > target_major:
+            if c_major - target_major > 1:
+                return False
+            return None  # 跨一个主版本，无法确定
+        elif c_major == target_major:
+            return c_minor <= target_minor + tolerance
+        else:
+            return True  # 旧主版本的补丁通常兼容
+    except Exception:
+        return None
 
 
 def filter_duplicates(
@@ -422,10 +506,10 @@ def apply_filters(
         result = filter_by_bug_type(items, target_bug_type)
         items = result.passed
 
-    # 4. 内核版本过滤
+    # 4. 内核版本过滤（uncertain 项的默认策略：保留）
     if kernel_version:
         result = filter_by_kernel_version(items, kernel_version)
-        items = result.passed
+        items = result.passed + result.uncertain
 
     # 5. 关键词过滤
     if required_keywords:

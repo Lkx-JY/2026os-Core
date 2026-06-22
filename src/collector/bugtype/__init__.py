@@ -1,11 +1,13 @@
 """Bug 类型识别模块
 
 负责根据 commit 消息和 diff 内容识别 bug 类型。
+所有输出通过 taxonomy.normalize_bug_type() 标准化。
 """
 
 import re
 from typing import List, Dict
 from ..models import CommitInfo
+from ...common.taxonomy import normalize_bug_type, BugType
 
 
 # Bug 类型定义
@@ -124,13 +126,13 @@ def detect_bug_type(commit: CommitInfo) -> str:
     """识别 commit 的 bug 类型"""
     full_text = f"{commit.subject} {commit.body}".lower()
     
-    # 根据关键字匹配 bug 类型
+    # 根据关键字匹配 bug 类型，输出标准化为 taxonomy.BugType
     for bug_type, keywords in BUG_TYPE_KEYWORDS.items():
         for keyword in keywords:
             if keyword in full_text:
-                return bug_type
+                return normalize_bug_type(bug_type).value
     
-    return "unknown"
+    return BugType.UNKNOWN.value
 
 
 def detect_all_bug_types(commit: CommitInfo) -> List[str]:
@@ -141,10 +143,12 @@ def detect_all_bug_types(commit: CommitInfo) -> List[str]:
     for bug_type, keywords in BUG_TYPE_KEYWORDS.items():
         for keyword in keywords:
             if keyword in full_text:
-                bug_types.append(bug_type)
+                normalized = normalize_bug_type(bug_type).value
+                if normalized not in bug_types:
+                    bug_types.append(normalized)
                 break
     
-    return bug_types if bug_types else ["unknown"]
+    return bug_types if bug_types else [BugType.UNKNOWN.value]
 
 
 def get_bug_type_description(bug_type: str) -> str:
@@ -177,5 +181,5 @@ def get_bug_type_description(bug_type: str) -> str:
 
 
 def get_all_bug_types() -> List[str]:
-    """获取所有已知 bug 类型"""
-    return BUG_TYPES.copy()
+    """获取所有已知 bug 类型（来自 taxonomy 标准枚举）"""
+    return [bt.value for bt in BugType]

@@ -144,7 +144,7 @@ async function checkServerStatus() {
 
 function openApiDocs() {
   const apiBase = import.meta.env.VITE_API_BASE || ''
-  window.open(`${apiBase.replace('/v1', '')}/docs`, '_blank')
+  window.open(`${apiBase.replace('/v1', '')}/docs`, '_blank', 'noopener,noreferrer')
 }
 
 onMounted(() => {

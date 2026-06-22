@@ -2,41 +2,15 @@
 
 import os
 from typing import Optional
-from functools import lru_cache
 
 from fastapi import Header, HTTPException, Depends
-import yaml
 
 from ...common.logging import get_logger
 
+# ★ 复用公共配置模块，避免重复实现
+from ...common.config import load_yaml_config, get_config
+
 logger = get_logger()
-
-
-# ============================================================================
-# 配置加载
-# ============================================================================
-
-@lru_cache()
-def load_config() -> dict:
-    """加载 config.yaml 配置（带缓存）"""
-    config_paths = [
-        os.environ.get("CONFIG_PATH", ""),
-        "configs/config.yaml",
-        os.path.join(os.path.dirname(__file__), "../../../configs/config.yaml"),
-    ]
-    for path in config_paths:
-        if path and os.path.isfile(path):
-            with open(path, "r", encoding="utf-8") as f:
-                config = yaml.safe_load(f)
-                logger.info(f"Config loaded from {path}")
-                return config or {}
-    logger.warning("No config file found, using defaults")
-    return {}
-
-
-def get_config() -> dict:
-    """获取配置字典（FastAPI 依赖注入）"""
-    return load_config()
 
 
 # ============================================================================
@@ -89,6 +63,37 @@ class PaginationParams:
 
 
 # ============================================================================
+# 向量库状态检查 (analyze 和 search 路由共用)
+# ============================================================================
+
+def check_index_ready() -> bool:
+    """检查向量库是否已初始化并有数据，同时验证嵌入模型是否就绪
+
+    供 analyze 和 search 路由共用，避免代码重复。
+    """
+    try:
+        from ...indexer.milvus import get_milvus_client
+        from ...indexer.embedding import get_encoder
+
+        # 检查嵌入模型（会触发一次性的降级警告）
+        encoder = get_encoder()
+        info = encoder.get_info()
+        if info.get("is_fallback", False):
+            logger.warning(
+                f"嵌入模型 {info['model_name']} 不可用 ({info.get('init_error', 'unknown')})，"
+                f"语义检索将不可靠"
+            )
+
+        # 检查向量库
+        client = get_milvus_client()
+        count = client.count()
+        return count > 0
+    except Exception as e:
+        logger.warning(f"向量库状态检查失败: {e}")
+        return False
+
+
+# ============================================================================
 # 服务实例 (懒加载)
 # ============================================================================
 
@@ -104,9 +109,10 @@ def get_analysis_service():
 
 
 __all__ = [
-    "load_config",
+    "load_yaml_config",
     "get_config",
     "verify_api_key",
     "PaginationParams",
     "get_analysis_service",
+    "check_index_ready",
 ]

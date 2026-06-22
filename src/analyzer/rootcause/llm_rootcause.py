@@ -137,27 +137,16 @@ def _call_llm_for_root_cause(
     temperature: float = 0.1,
     max_tokens: int = 2048,
 ) -> str:
-    """调用 LLM API 进行根因分析"""
+    """调用 LLM API 进行根因分析 — 委托给统一的 LLMClient"""
     try:
-        from openai import OpenAI
-        from ...common.config import get_llm_api_key, get_llm_base_url
-
-        client = OpenAI(
-            api_key=get_llm_api_key(),
-            base_url=get_llm_base_url(),
-        )
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+        from ...generator.llm import get_llm_client
+        return get_llm_client().chat(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
+            model=model_name,
         )
-        return response.choices[0].message.content or ""
-    except ImportError:
-        raise RuntimeError("openai package not installed. Install with: pip install openai")
     except Exception as e:
         raise RuntimeError(f"LLM API call failed: {e}")
 

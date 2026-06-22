@@ -475,28 +475,15 @@ def _call_llm_for_analysis(
     temperature: float,
     max_tokens: int,
 ) -> str:
-    """调用 LLM API 进行分析"""
+    """调用 LLM API 进行分析 — 委托给统一的 LLMClient"""
     try:
-        from openai import OpenAI
-        from ...common.config import get_llm_api_key, get_llm_base_url
-
-        client = OpenAI(
-            api_key=get_llm_api_key(),
-            base_url=get_llm_base_url(),
-        )
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+        from ...generator.llm import get_llm_client
+        return get_llm_client().chat(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
-        )
-        return response.choices[0].message.content or ""
-    except ImportError:
-        raise RuntimeError(
-            "openai package not installed. Install with: pip install openai"
+            model=model_name,
         )
     except Exception as e:
         raise RuntimeError(f"LLM API call failed: {e}")
@@ -663,7 +650,9 @@ def _detect_bug_type_from_dmesg(dmesg_content: str) -> str:
 
     for bug_type, hints in bug_type_hints:
         if any(hint in dmesg_lower for hint in hints):
-            return bug_type
+            # 标准化为 taxonomy.BugType
+            from ...common.taxonomy import normalize_bug_type
+            return normalize_bug_type(bug_type).value
     return "unknown"
 
 

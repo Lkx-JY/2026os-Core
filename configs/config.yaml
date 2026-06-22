@@ -34,6 +34,16 @@ server:
   port: 8000
   reload: true
 
+retrieval:
+  # 多阶段融合权重 — 综合向量相似度/Reranker交叉编码/LLM因果判断
+  # recall(0.2): 向量相似度仅反映语义相关性，无法区分同bug类型不同子系统
+  # reranker(0.4): BGE-Reranker-v2-m3提供精确匹配信号
+  # judge(0.4): LLM Judge提供因果推理信号，两者互补
+  fusion_weights:
+    recall: 0.2
+    reranker: 0.4
+    judge: 0.4
+
 logging:
   level: "INFO"
   log_dir: "logs"

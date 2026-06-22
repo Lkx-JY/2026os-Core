@@ -223,7 +223,7 @@ const bugTypeChartOption = computed(() => ({
 }))
 
 function openApiDocs() {
-  window.open('/api/docs', '_blank')
+  window.open('/api/docs', '_blank', 'noopener,noreferrer')
 }
 
 onMounted(() => {

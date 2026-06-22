@@ -401,8 +401,14 @@ class MilvusBackend:
                 import asyncio
                 uri = f"http://{self.host}:{self.port}"
                 client = PyMilvusClient(uri=uri, timeout=timeout)
-                # 验证服务器是否真实可达 (新版本 list_collections 是 async)
-                asyncio.run(client.list_collections())
+                # 验证服务器是否真实可达 — 兼容同步/异步上下文
+                try:
+                    loop = asyncio.get_running_loop()
+                    # 在 async 上下文中，不在事件循环内嵌套 asyncio.run
+                    print(f"Info: 检测到异步上下文, 跳过 Milvus list_collections 连通性检查")
+                except RuntimeError:
+                    # 无运行中的事件循环，安全使用 asyncio.run
+                    asyncio.run(client.list_collections())
             except Exception:
                 # 新版 API 不可用, 尝试旧版
                 try:
@@ -655,8 +661,19 @@ class MilvusBackend:
         """准备符合 Schema 的插入数据"""
         n = vectors.shape[0]
 
+        # 边界检查：确保 metadata 和 vectors 数量匹配
+        if len(metadata) != n:
+            logger.warning(
+                f"metadata 数量 ({len(metadata)}) 与 vectors 行数 ({n}) 不匹配, "
+                f"将按较短的数量截断"
+            )
+            m = min(len(metadata), n)
+            metadata = metadata[:m]
+            vectors = vectors[:m]
+            n = m
+
         data = {
-            "embedding": [vectors[i].tolist() for i in range(n)],
+            "embedding": vectors,  # Milvus SDK 直接接受 numpy array，无需 tolist()
             "commit_hash": [],
             "subject": [],
             "subsystem": [],
@@ -1011,26 +1028,35 @@ class MilvusClient:
                 if n == 0:
                     return []
 
-                # row-wise list-of-dicts 格式
-                data = []
-                for i in range(n):
-                    row = {
-                        "vector": vectors[i].tolist(),
-                        "commit_hash": str(metadata[i].get("commit_hash", ""))[:64] if i < len(metadata) else "",
-                        "subject": str(metadata[i].get("subject", ""))[:512] if i < len(metadata) else "",
-                        "subsystem": str(metadata[i].get("subsystem", "unknown"))[:64] if i < len(metadata) else "unknown",
-                        "bug_type": str(metadata[i].get("bug_type", "unknown"))[:64] if i < len(metadata) else "unknown",
-                        "author": str(metadata[i].get("author", ""))[:128] if i < len(metadata) else "",
-                        "date": str(metadata[i].get("date", ""))[:32] if i < len(metadata) else "",
-                        "score": float(metadata[i].get("score", 0.0)) if i < len(metadata) else 0.0,
-                    }
-                    data.append(row)
+                # 设置合理的 batch_size
+                effective_batch = batch_size if batch_size and batch_size > 0 else 1000
+                total_inserted = 0
 
-                res = self._milvus_lite_client.insert(
-                    collection_name=self.collection_name,
-                    data=data,
-                )
-                return list(range(res.get("insert_count", n)))
+                for batch_start in range(0, n, effective_batch):
+                    batch_end = min(batch_start + effective_batch, n)
+
+                    # row-wise list-of-dicts 格式
+                    data = []
+                    for i in range(batch_start, batch_end):
+                        row = {
+                            "vector": vectors[i].tolist(),
+                            "commit_hash": str(metadata[i].get("commit_hash", ""))[:64] if i < len(metadata) else "",
+                            "subject": str(metadata[i].get("subject", ""))[:512] if i < len(metadata) else "",
+                            "subsystem": str(metadata[i].get("subsystem", "unknown"))[:64] if i < len(metadata) else "unknown",
+                            "bug_type": str(metadata[i].get("bug_type", "unknown"))[:64] if i < len(metadata) else "unknown",
+                            "author": str(metadata[i].get("author", ""))[:128] if i < len(metadata) else "",
+                            "date": str(metadata[i].get("date", ""))[:32] if i < len(metadata) else "",
+                            "score": float(metadata[i].get("score", 0.0)) if i < len(metadata) else 0.0,
+                        }
+                        data.append(row)
+
+                    res = self._milvus_lite_client.insert(
+                        collection_name=self.collection_name,
+                        data=data,
+                    )
+                    total_inserted += res.get("insert_count", batch_end - batch_start)
+
+                return list(range(total_inserted))
             except Exception as e:
                 print(f"Milvus Lite insert error: {e}")
                 return []

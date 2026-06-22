@@ -87,6 +87,7 @@ class BGEEncoder(BaseEncoder):
         self.model = None
         self._initialized = False
         self._init_error = None
+        self._fallback_warned = False  # 降级警告只发一次
 
     @staticmethod
     def _auto_detect_device() -> str:
@@ -275,6 +276,21 @@ class BGEEncoder(BaseEncoder):
 
             return np.array(embeddings, dtype=np.float32)
         else:
+            # ★ 降级警告 — 模型不可用时使用随机向量（确保下游能感知）
+            if not self._fallback_warned:
+                import warnings
+                warnings.warn(
+                    f"\n{'='*60}\n"
+                    f"  ⚠️  嵌入模型 '{self.model_name}' 不可用\n"
+                    f"  原因: {self._init_error or '模型加载失败'}\n"
+                    f"  当前使用 RANDOM 向量降级，语义检索将不可靠!\n"
+                    f"  请安装: pip install sentence-transformers\n"
+                    f"{'='*60}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                self._fallback_warned = True
+
             # Mock 降级 — 返回归一化的随机向量
             n = len(texts)
             vecs = np.random.randn(n, self._dimension).astype(np.float32)
@@ -297,6 +313,7 @@ class BGEEncoder(BaseEncoder):
             "normalize": self.normalize,
             "available": self.model is not None,
             "init_error": self._init_error,
+            "is_fallback": self.model is None,  # 是否正在使用随机向量降级
         }
 
 

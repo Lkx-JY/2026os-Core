@@ -333,26 +333,16 @@ Output:"""
 
 
 def _call_llm(prompt: str, model_name: str) -> str:
-    """调用 LLM API"""
+    """调用 LLM API — 委托给统一的 LLMClient"""
     try:
-        from openai import OpenAI
-        from ...common.config import get_llm_api_key, get_llm_base_url
-
-        client = OpenAI(
-            api_key=get_llm_api_key(),
-            base_url=get_llm_base_url(),
-        )
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=[{"role": "user", "content": prompt}],
+        from ...generator.llm import get_llm_client
+        return get_llm_client().chat(
+            prompt=prompt,
             temperature=0.1,
             max_tokens=2048,
+            model=model_name,
         )
-        return response.choices[0].message.content or ""
-    except ImportError:
-        raise RuntimeError("openai package not installed")
     except Exception as e:
-        # 尝试本地模型
         raise RuntimeError(f"LLM call failed: {e}")
 
 
@@ -388,15 +378,30 @@ def _parse_judge_response(
 # 多维度评分融合
 # ============================================================================
 
+def _load_fusion_weights() -> Tuple[float, float, float]:
+    """从 config.yaml 加载融合权重，回退到默认值 (0.2, 0.4, 0.4)"""
+    try:
+        from ...common.config import load_yaml_config
+        config = load_yaml_config()
+        retrieval = config.get("retrieval", {}).get("fusion_weights", {})
+        return (
+            float(retrieval.get("recall", 0.2)),
+            float(retrieval.get("reranker", 0.4)),
+            float(retrieval.get("judge", 0.4)),
+        )
+    except Exception:
+        return (0.2, 0.4, 0.4)
+
+
 def fuse_scores(
     vector_scores: List[float],
     reranker_scores: List[float],
     llm_scores: List[float],
-    weights: Tuple[float, float, float] = (0.2, 0.4, 0.4),
+    weights: Optional[Tuple[float, float, float]] = None,
 ) -> List[float]:
     """融合多维度评分为综合分数
 
-    默认权重设计理念:
+    默认权重从 config.yaml retrieval.fusion_weights 读取，设计理念:
     - 向量相似度 (0.2): 作为基础信号，但不完全依赖 — 语义相似 ≠ 因果匹配
     - Reranker 分数 (0.4): 交叉编码器捕获了 query-doc 交互语义，权重较高
     - LLM Judge (0.4): 大模型的因果推理最接近人类专家判断，权重最高
@@ -405,11 +410,13 @@ def fuse_scores(
         vector_scores: 向量相似度列表
         reranker_scores: Reranker 交叉编码分数列表
         llm_scores: LLM 因果评分列表
-        weights: (vector_weight, reranker_weight, llm_weight)
+        weights: (vector_weight, reranker_weight, llm_weight)，None时从配置读取
 
     Returns:
         综合分数列表
     """
+    if weights is None:
+        weights = _load_fusion_weights()
     w_vec, w_rerank, w_llm = weights
 
     fused = []
@@ -434,7 +441,7 @@ def rerank_candidates(
     candidates: List[Dict[str, Any]],
     vector_scores: Optional[List[float]] = None,
     use_llm_judge: bool = True,
-    weights: Tuple[float, float, float] = (0.2, 0.4, 0.4),
+    weights: Optional[Tuple[float, float, float]] = None,
 ) -> RankedResult:
     """完整的候选重排流程
 

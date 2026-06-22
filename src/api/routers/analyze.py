@@ -1,12 +1,12 @@
 """分析路由 — 宕机日志分析的核心 API."""
 
-import time
+import asyncio
 import uuid
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends  # type: ignore
 
 from ..schemas.requests import AnalyzeRequest
 from ..schemas.responses import AnalyzeResponse, TaskStatusResponse, ErrorResponse
@@ -16,7 +16,7 @@ from ..schemas.entities import (
     CommitInfo,
     AnalysisStep,
 )
-from ..dependencies import get_config
+from ..dependencies import get_config, check_index_ready
 from ..storage import get_task_store, RedisTaskStore
 from ...common.logging import get_logger
 
@@ -81,7 +81,7 @@ def _save_task(task_id: str, data: dict) -> None:
                 try:
                     oldest = min(
                         _memory_tasks.keys(),
-                        key=lambda k: _memory_tasks[k].get("created_at", datetime.utcnow()),
+                        key=lambda k: _memory_tasks[k].get("created_at", datetime.now(timezone.utc)),
                     )
                     del _memory_tasks[oldest]
                 except (ValueError, KeyError):
@@ -103,15 +103,8 @@ def _get_task(task_id: str) -> Optional[dict]:
 _USE_REAL_PIPELINE = None  # None = 自动检测, True = 强制真实, False = 强制 Mock
 
 
-def _check_index_ready() -> bool:
-    """检查向量库是否已初始化并有数据"""
-    try:
-        from ...indexer.milvus import get_milvus_client
-        client = get_milvus_client()
-        count = client.count()
-        return count > 0
-    except Exception:
-        return False
+# ★ 复用 shared dependency 中的 index ready 检查
+_check_index_ready = check_index_ready
 
 
 def _should_use_real_pipeline() -> bool:
@@ -126,7 +119,7 @@ def _should_use_real_pipeline() -> bool:
     return ready
 
 
-def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
+async def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
     """Mock 分析流水线 (向量库未初始化时的降级方案)"""
     steps: list[AnalysisStep] = []
 
@@ -134,29 +127,29 @@ def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
         # Step 1: 日志解析
         steps.append(AnalysisStep(
             name="日志解析", status="running",
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         ))
         _save_task(task_id, {
             "task_id": task_id,
             "status": "running",
             "progress": 0.1,
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc),
             "steps": steps,
             "request": request,
         })
-        time.sleep(0.3)
+        await asyncio.sleep(0.3)
 
         steps[-1].status = "completed"
-        steps[-1].completed_at = datetime.utcnow()
+        steps[-1].completed_at = datetime.now(timezone.utc)
         steps[-1].detail = f"成功解析 {request.log_type} 日志，提取 {len(request.log_content.splitlines())} 行"
 
         # Step 2: Root Cause 抽象
         steps.append(AnalysisStep(
             name="根因分析", status="running",
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         ))
         _save_task(task_id, {"progress": 0.3, "steps": steps})
-        time.sleep(0.5)
+        await asyncio.sleep(0.5)
 
         # 基于日志关键词推断根因
         log_lower = request.log_content.lower()
@@ -210,35 +203,35 @@ def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
             )
 
         steps[-1].status = "completed"
-        steps[-1].completed_at = datetime.utcnow()
+        steps[-1].completed_at = datetime.now(timezone.utc)
         steps[-1].detail = f"根因类型: {root_cause.root_cause}, 置信度: {root_cause.confidence:.2f}"
 
         # Step 3: 向量检索
         steps.append(AnalysisStep(
             name="向量检索", status="running",
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         ))
         _save_task(task_id, {"progress": 0.5, "steps": steps})
-        time.sleep(0.4)
+        await asyncio.sleep(0.4)
 
         matched_patches = _get_mock_patches(request.top_k, root_cause)
 
         steps[-1].status = "completed"
-        steps[-1].completed_at = datetime.utcnow()
+        steps[-1].completed_at = datetime.now(timezone.utc)
         steps[-1].detail = f"Milvus 召回 Top-100, Reranker 重排后返回 Top-{request.top_k}"
 
         # Step 4: LLM 解释生成
         if request.enable_llm_explanation:
             steps.append(AnalysisStep(
                 name="LLM 解释生成", status="running",
-                started_at=datetime.utcnow(),
+                started_at=datetime.now(timezone.utc),
             ))
             _save_task(task_id, {"progress": 0.8, "steps": steps})
-            time.sleep(0.6)
+            await asyncio.sleep(0.6)
 
             llm_explanation = _generate_mock_explanation(root_cause, matched_patches)
             steps[-1].status = "completed"
-            steps[-1].completed_at = datetime.utcnow()
+            steps[-1].completed_at = datetime.now(timezone.utc)
             steps[-1].detail = "LLM 分析完成"
         else:
             llm_explanation = None
@@ -251,11 +244,11 @@ def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
             "matched_patches": matched_patches,
             "steps": steps,
             "llm_explanation": llm_explanation,
-            "completed_at": datetime.utcnow(),
+            "completed_at": datetime.now(timezone.utc),
         })
 
     except Exception as e:
-        logger.error(f"Analysis task {task_id} failed: {e}")
+        logger.error(f"Analysis task {task_id} failed: {e}", exc_info=True)
         _save_task(task_id, {"status": "failed", "error": str(e)})
         if steps and steps[-1].status == "running":
             steps[-1].status = "failed"
@@ -278,13 +271,13 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
         # ── Step 1: 日志解析 ──────────────────────────────────────
         steps.append(AnalysisStep(
             name="日志解析", status="running",
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         ))
         _save_task(task_id, {
             "task_id": task_id,
             "status": "running",
             "progress": 0.05,
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc),
             "steps": steps,
             "request": request,
         })
@@ -292,7 +285,7 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
         from ...analyzer.dmesg import parse_dmesg
         feature = parse_dmesg(request.log_content)
         steps[-1].status = "completed"
-        steps[-1].completed_at = datetime.utcnow()
+        steps[-1].completed_at = datetime.now(timezone.utc)
         steps[-1].detail = (
             f"成功解析 {request.log_type} 日志, "
             f"子系统={feature.subsystem}, "
@@ -302,7 +295,7 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
         # ── Step 2: Root Cause 抽象 ──────────────────────────────
         steps.append(AnalysisStep(
             name="根因分析", status="running",
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         ))
         _save_task(task_id, {"progress": 0.15, "steps": steps})
 
@@ -319,7 +312,7 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
         )
 
         steps[-1].status = "completed"
-        steps[-1].completed_at = datetime.utcnow()
+        steps[-1].completed_at = datetime.now(timezone.utc)
         steps[-1].detail = (
             f"根因: {root_cause_result.root_cause}, "
             f"置信度: {root_cause_result.score:.2f}, "
@@ -334,7 +327,7 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
         # ── Step 3: 向量检索 + 重排 ──────────────────────────────
         steps.append(AnalysisStep(
             name="向量检索与重排", status="running",
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         ))
         _save_task(task_id, {"progress": 0.40, "steps": steps})
 
@@ -370,7 +363,7 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
                 ))
 
         steps[-1].status = "completed"
-        steps[-1].completed_at = datetime.utcnow()
+        steps[-1].completed_at = datetime.now(timezone.utc)
         if diagnosis.retrieval_result:
             steps[-1].detail = (
                 f"召回 {diagnosis.retrieval_result.recall_count} 条, "
@@ -394,7 +387,7 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
         if request.enable_llm_explanation:
             steps.append(AnalysisStep(
                 name="LLM 解释生成", status="running",
-                started_at=datetime.utcnow(),
+                started_at=datetime.now(timezone.utc),
             ))
             _save_task(task_id, {"progress": 0.90, "steps": steps})
 
@@ -414,7 +407,7 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
                 llm_explanation = _generate_real_explanation(root_cause_info, matched_patches)
 
             steps[-1].status = "completed"
-            steps[-1].completed_at = datetime.utcnow()
+            steps[-1].completed_at = datetime.now(timezone.utc)
             steps[-1].detail = "LLM 分析完成"
         else:
             llm_explanation = None
@@ -427,7 +420,7 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
             "matched_patches": matched_patches,
             "steps": steps,
             "llm_explanation": llm_explanation,
-            "completed_at": datetime.utcnow(),
+            "completed_at": datetime.now(timezone.utc),
         })
 
     except Exception as e:
@@ -569,7 +562,7 @@ async def create_analysis(
     返回 task_id 后可通过 GET /api/v1/analyze/{task_id} 轮询结果。
     """
     task_id = f"task_{uuid.uuid4().hex[:12]}"
-    created_at = datetime.utcnow()
+    created_at = datetime.now(timezone.utc)
 
     _save_task(task_id, {
         "task_id": task_id,
@@ -624,7 +617,7 @@ async def get_analysis_status(task_id: str) -> TaskStatusResponse:
             matched_patches=task.get("matched_patches", []),
             analysis_steps=task.get("steps", []),
             llm_explanation=task.get("llm_explanation"),
-            created_at=created_at or datetime.utcnow(),
+            created_at=created_at or datetime.now(timezone.utc),
             completed_at=completed_at,
             elapsed_ms=int(
                 (completed_at - created_at).total_seconds() * 1000
@@ -642,27 +635,38 @@ async def get_analysis_status(task_id: str) -> TaskStatusResponse:
 
 @router.get("", response_model=list[dict])
 async def list_analyses(page: int = 1, page_size: int = 20) -> list[dict]:
-    """列出历史分析任务"""
+    """列出历史分析任务
+
+    注意: 当前实现为简化版本，大量任务时建议使用 Redis 的有序集合分页。
+    """
+    MAX_LOAD = 500  # 最多加载 500 条任务，防止内存溢出
     store = _get_store()
     all_task_ids = store.list_tasks()
-    
+
+    # 内存回退时也有 list_tasks 操作，统一兼容
+    if not all_task_ids:
+        all_task_ids = list(_memory_tasks.keys())
+
     tasks = []
-    for task_id in all_task_ids:
-        task = store.get_task(task_id)
+    # 从最新开始迭代，达到 MAX_LOAD 时停止
+    for task_id in reversed(all_task_ids):
+        if len(tasks) >= MAX_LOAD:
+            break
+        task = store.get_task(task_id) or _memory_tasks.get(task_id)
         if task:
             created_at = task.get("created_at")
             if isinstance(created_at, str):
                 try:
                     created_at = datetime.fromisoformat(created_at)
                 except ValueError:
-                    created_at = datetime.utcnow()
+                    created_at = datetime.now(timezone.utc)
             elif not isinstance(created_at, datetime):
-                created_at = datetime.utcnow()
+                created_at = datetime.now(timezone.utc)
             tasks.append((task, created_at))
-    
-    # 按创建时间排序
+
+    # 按创建时间排序（已经在迭代中大致有序，再做精确排序）
     tasks.sort(key=lambda x: x[1], reverse=True)
-    
+
     start = (page - 1) * page_size
     end = start + page_size
 
@@ -672,6 +676,7 @@ async def list_analyses(page: int = 1, page_size: int = 20) -> list[dict]:
             "status": t["status"],
             "created_at": t.get("created_at"),
             "log_type": t.get("request", {}).get("log_type", "unknown"),
+            "log_preview": (t.get("request", {}).get("log_content", "") or "")[:100],
             "progress": t.get("progress", 0),
         }
         for t, _ in tasks[start:end]

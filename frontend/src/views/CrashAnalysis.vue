@@ -237,6 +237,21 @@ Call Trace:
           <el-empty v-if="!currentTask.result.matched_patches?.length" description="未找到匹配的补丁" />
         </el-card>
 
+        <!-- Mock 模式警告 -->
+        <el-alert
+          v-if="currentTask.result?.analysis_mode === 'mock'"
+          title="⚠️ 演示模式 — 向量库未索引提交数据，当前返回模拟结果"
+          type="warning"
+          :closable="false"
+          show-icon
+          class="mt-4"
+        >
+          <template #default>
+            请先运行索引脚本:
+            <el-tag>python scripts/index_all_commits.py --repo-path &lt;linux-repo&gt; --limit 10000</el-tag>
+          </template>
+        </el-alert>
+
         <!-- LLM 解释 -->
         <el-card shadow="hover" class="section-card mt-4" v-if="currentTask.result.llm_explanation">
           <template #header>
@@ -271,6 +286,7 @@ import {
   bugTypeLabel, shortHash, formatPercent, copyToClipboard,
 } from '@/utils/format'
 import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 
 const route = useRoute()
 const router = useRouter()
@@ -328,7 +344,7 @@ const confidenceColor = computed(() => {
 
 const renderedExplanation = computed(() => {
   const text = currentTask.value?.result?.llm_explanation || ''
-  return marked(text)
+  return DOMPurify.sanitize(marked(text))
 })
 
 // ── 快速示例 ───────────────────────────────────
@@ -374,16 +390,20 @@ async function submitAnalysis() {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
 
-  const taskId = await analysisStore.submitAnalysis({
-    log_content: form.log_content,
-    log_type: form.log_type,
-    kernel_version: form.kernel_version || undefined,
-    top_k: form.top_k,
-    enable_llm_explanation: form.enable_llm_explanation,
-  })
+  try {
+    const taskId = await analysisStore.submitAnalysis({
+      log_content: form.log_content,
+      log_type: form.log_type,
+      kernel_version: form.kernel_version || undefined,
+      top_k: form.top_k,
+      enable_llm_explanation: form.enable_llm_explanation,
+    })
 
-  router.replace({ path: '/analyze', query: { task: taskId } })
-  ElMessage.success('分析任务已提交，正在处理...')
+    router.replace({ path: '/analyze', query: { task: taskId } })
+    ElMessage.success('分析任务已提交，正在处理...')
+  } catch (err) {
+    ElMessage.error('提交分析失败: ' + (err.response?.data?.detail || err.message || '未知错误'))
+  }
 }
 
 function resetForm() {
@@ -411,12 +431,19 @@ onMounted(() => {
   const taskId = route.query.task
   if (taskId && analysisStore.tasks[taskId]) {
     analysisStore.setCurrentTask(taskId)
+    // 如果任务仍在运行，重新启动轮询（页面刷新不会丢失进度）
+    if (analysisStore.tasks[taskId].status === 'running') {
+      analysisStore.startPolling(taskId)
+    }
   }
 })
 
 watch(() => route.query.task, (taskId) => {
   if (taskId && analysisStore.tasks[taskId]) {
     analysisStore.setCurrentTask(taskId)
+    if (analysisStore.tasks[taskId].status === 'running') {
+      analysisStore.startPolling(taskId)
+    }
   }
 })
 </script>
