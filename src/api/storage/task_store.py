@@ -8,6 +8,10 @@ from datetime import datetime
 import redis
 from pydantic import BaseModel
 
+from ...common.logging import get_logger
+
+logger = get_logger()
+
 
 class RedisTaskStore:
     """基于 Redis 的任务状态存储
@@ -99,10 +103,7 @@ class RedisTaskStore:
             conn.setex(key, self.TASK_TTL, json.dumps(serializable_data))
             return True
         except Exception as e:
-            import sys
-            sys.modules['src.api.routers.analyze'].logger.error(
-                f"Failed to save task {task_id}: {e}"
-            )
+            logger.error(f"Failed to save task {task_id}: {e}")
             return False
 
     def get_task(self, task_id: str) -> Optional[dict]:

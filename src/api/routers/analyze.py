@@ -2,6 +2,7 @@
 
 import time
 import uuid
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -36,6 +37,7 @@ def _get_store() -> RedisTaskStore:
 
 # 内存回退存储 (当 Redis 不可用时) — 必须在 _save_task 之前定义
 _memory_tasks: dict[str, dict] = {}
+_memory_lock = threading.Lock()
 
 
 def _serialize_value(value):
@@ -68,19 +70,32 @@ def _save_task(task_id: str, data: dict) -> None:
     logger.info(f"Saving task {task_id} to Redis: {list(data.keys())}")
     success = store.save_task(task_id, existing)
     logger.info(f"Save to Redis: {success}")
-    
+
     if not success:
         # Redis 不可用时的内存回退
         logger.warning(f"Redis save failed, using memory fallback for {task_id}")
-        _memory_tasks[task_id] = existing
+        with _memory_lock:
+            # 限制内存存储上限，防止内存泄漏
+            if len(_memory_tasks) >= 10000:
+                # 清理最早创建的条目（基于 created_at）
+                try:
+                    oldest = min(
+                        _memory_tasks.keys(),
+                        key=lambda k: _memory_tasks[k].get("created_at", datetime.utcnow()),
+                    )
+                    del _memory_tasks[oldest]
+                except (ValueError, KeyError):
+                    pass
+            _memory_tasks[task_id] = existing
 
 
 def _get_task(task_id: str) -> Optional[dict]:
     """从 Redis 获取任务，回退到内存"""
     store = _get_store()
     task = store.get_task(task_id)
-    if task is None and task_id in _memory_tasks:
-        task = _memory_tasks[task_id]
+    if task is None:
+        with _memory_lock:
+            task = _memory_tasks.get(task_id)
     return task
 
 

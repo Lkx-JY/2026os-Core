@@ -1,5 +1,4 @@
 pydriller
-GitPython
 sentence-transformers
 faiss-cpu
 pymilvus
@@ -17,3 +16,4 @@ loguru
 psutil
 pyarrow
 tqdm
+modelscope

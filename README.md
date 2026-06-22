@@ -1,197 +1,573 @@
-# Core.LinuxCommit
+# project3136859-388917
 
 > **Linux Kernel Crash → Root Cause → Patch Matching System**
+>
+> 基于 RAG (Retrieval-Augmented Generation) + 内核领域知识 + LLM 的自动化内核补丁匹配系统。
+> 输入 dmesg/vmcore 宕机日志，自动识别根因并从百万级 Linux kernel commit 中精准匹配修复补丁。
 
-基于 RAG (Retrieval-Augmented Generation) + Linux Kernel Debugging + LLM 的自动化内核补丁匹配系统。
+[![Python](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)](https://fastapi.tiangolo.com/)
+[![Vue](https://img.shields.io/badge/Vue-3.x-brightgreen.svg)](https://vuejs.org/)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
 
-## 1. 项目愿景
+## 目录
 
-在复杂的 Linux 内核运维场景中，当发生内核宕机（Kernel Crash）时，传统的排查方式依赖专家经验，耗时且低效。本项目旨在通过自动化手段，实现从**宕机现象解析**到**根因分析**，再到**补丁精准推荐**的全链路闭环，显著提升内核故障的修复效率。
+- [1. 项目背景](#1-项目背景)
+- [2. 核心架构](#2-核心架构)
+- [3. 技术创新点](#3-技术创新点)
+- [4. 技术栈](#4-技术栈)
+- [5. 项目结构](#5-项目结构)
+- [6. 快速开始](#6-快速开始)
+- [7. API 文档](#7-api-文档)
+- [8. 前端界面](#8-前端界面)
+- [9. 开发指南](#9-开发指南)
+- [10. 性能指标](#10-性能指标)
+
+---
+
+## 1. 项目背景
+
+### 问题场景
+
+Linux 内核宕机（Kernel Crash）是云计算和数据中心运维的核心痛点。当系统发生 hardlockup、hungtask、内存错误等故障时：
+
+- **传统人工分析** 需要数小时甚至数天，依赖资深内核专家
+- **Linux 内核 Git 仓库** 包含 30+ 年演进历史、累计超过 100 万次 commit、涉及上万名开发者
+- **宕机日志与补丁描述** 存在语义鸿沟 — 日志呈现运行时错误现象，补丁描述代码层修复逻辑
+- 从海量 commit 中定位修复补丁效率极低，容易遗漏关键信息
+
+### 解决方案
+
+Core.LinuxCommit 构建了 **四阶段检索增强生成 (RAG) 流水线**：
+
+```text
+宕机日志 (dmesg/vmcore)
+    │
+    ▼
+┌─────────────────────────────────────────────────────┐
+│  Phase 1: 特征提取                                    │
+│  正则 + LLM → CrashFeature (子系统/错误类型/调用栈)     │
+└──────────────────────┬──────────────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  Phase 2: 根因抽象 (28 条专家规则 + 4 层分层分析)      │
+│  CrashFeature → RootCauseResult                      │
+│  ★ 对称 Root Cause Embedding 核心创新                 │
+└──────────────────────┬──────────────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  Phase 3: 向量检索 (Milvus/FAISS Top-100 Recall)     │
+│  Rule Filter → BGE Rerank → LLM Judge               │
+└──────────────────────┬──────────────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  Phase 4: 报告生成                                    │
+│  Top-N 补丁推荐 + 相关性评分 + LLM 解释               │
+└─────────────────────────────────────────────────────┘
+```
+
+---
 
 ## 2. 核心架构
 
-系统的核心逻辑分为 **离线数据治理** 与 **在线分析检索** 两个阶段：
+系统分为 **离线数据治理** 和 **在线分析检索** 两个阶段：
 
-### 2.1 整体流程图
-```text
-                        Linux Kernel Crash Analysis AI
-                                     │
-        ┌────────────────────────────┼────────────────────────────┐
-        │                            │                            │
-        ▼                            ▼                            ▼
-    日志理解模块                  向量检索模块                 补丁推理模块
-        │                            │                            │
- ┌──────┼──────┐              ┌──────┼──────┐             ┌──────┼──────┐
- │      │      │              │      │      │             │      │      │
- ▼      ▼      ▼              ▼      ▼      ▼             ▼      ▼      ▼
-dmesg  vmcore RootCause    Milvus  Recall Rerank      LLM   Prompt Report
-解析    解析    抽象        向量库  TopK   重排        分析   工程   生成
-        │
-        ▼
- Kernel Expert Knowledge
-```
-
-## 3. 项目目录结构
+### 2.1 离线阶段 — Commit 知识库构建
 
 ```text
-core-linuxcommit/
-├── src/                        # 源代码根目录
-│   ├── api/                    # FastAPI 接口层
-│   │   ├── routers/            # 路由定义 (analyze, search, stats)
-│   │   ├── schemas/            # Pydantic 数据模型 (Request/Response)
-│   │   ├── middleware/         # 异常处理、日志拦截中间件
-│   │   └── dependencies/       # 鉴权、数据库连接等依赖
-│   ├── analyzer/               # 宕机日志/vmcore 解析核心
-│   │   ├── dmesg/              # dmesg 正则解析与 Call Trace 提取
-│   │   ├── vmcore/             # 基于 drgn 的 vmcore 对象提取
-│   │   ├── drgn/               # drgn 调试工具封装
-│   │   ├── rootcause/          # 根因抽象模型逻辑
-│   │   ├── models/             # 分析结果数据模型
-│   │   └── pipeline/           # 分析流水线编排
-│   ├── collector/              # 离线数据采集 (Git Mining)
-│   │   ├── git/                # PyDriller 仓库遍历
-│   │   ├── parser/             # Commit Diff/Message 解析
-│   │   ├── subsystem/          # 内核子系统识别逻辑
-│   │   ├── analysis/           # 高级特征分析（锁、RCU、refcount）
-│   │   ├── bugtype/            # Bug 类型识别
-│   │   └── models/             # CommitInfo/FileChangeInfo 数据模型
-│   ├── indexer/                # 向量化与索引
-│   │   ├── embedding/          # BGE-M3 模型调用
-│   │   ├── milvus/             # Milvus 向量存取封装
-│   │   └── pipeline/           # 索引构建流水线
-│   ├── retriever/              # 检索与重排 (核心逻辑)
-│   │   ├── recall/             # Milvus 向量召回 (Top-K)
-│   │   ├── rerank/             # BGE-Reranker-v2 精准排序
-│   │   ├── filter/             # 基于版本/子系统的规则过滤
-│   │   └── pipeline/           # 检索流水线
-│   ├── generator/              # 报告生成
-│   │   ├── llm/                # DeepSeek/Qwen 接口封装
-│   │   ├── prompt/             # 提示词工程 (RAG Prompt)
-│   │   └── report/             # Markdown/JSON 报告格式化
-│   ├── knowledge/              # 内核专家知识库
-│   │   ├── bug_patterns/       # 典型 Bug 模式映射
-│   │   ├── lock_rules/         # 锁依赖语义规则
-│   │   └── subsystem_graph/    # 子系统交互图谱
-│   ├── models/                 # SQLAlchemy/Pydantic 全局模型
-│   ├── services/               # 业务逻辑编排层 (Orchestration)
-│   └── common/                 # 通用工具类
-│       ├── exceptions/         # 自定义业务异常
-│       ├── logging/            # Loguru 统一日志配置
-│       └── utils/              # 辅助函数
-├── frontend/                   # Vue 3 + Element Plus 前端 (Vite 构建)
-├── configs/                    # 配置文件 (.env, config.yaml)
-├── data/                       # 本地持久化数据与缓存
-├── docker/                     # Dockerfile 与 Compose 配置
-├── scripts/                    # 运维与初始化脚本
-├── tests/                      # Pytest 单元测试与集成测试
-└── requirements.txt            # 项目依赖
+Linux Kernel Git Repo (145 万+ commits)
+    │
+    ▼ PyDriller 流式遍历 (O(1) 内存)
+┌─────────────────────────────────────────┐
+│ 结构化提取                               │
+│ · commit_id / subject / body            │
+│ · subsystem (28 个子系统)                │
+│ · bug_type (21 种 Bug 类型)              │
+│ · diff 语义分析 (锁/RCU/refcount)        │
+│ · Fixes: / Cc: stable 标签解析           │
+└───────────────┬─────────────────────────┘
+                ▼
+┌─────────────────────────────────────────┐
+│ ★ 对称 Root Cause 分析                   │
+│ 对 Commit 使用与宕机日志相同的分析引擎     │
+│ → 消除 "现象 vs 补丁" 语义鸿沟            │
+└───────────────┬─────────────────────────┘
+                ▼
+┌─────────────────────────────────────────┐
+│ BGE-M3 向量编码 (1024 维)                │
+│ → Milvus Lite / FAISS 向量库存储         │
+└─────────────────────────────────────────┘
 ```
+
+### 2.2 在线阶段 — 宕机诊断与补丁匹配
+
+```text
+用户提交: dmesg 日志 / vmcore 文件
+    │
+    ▼
+┌──────────────────────────────────┐
+│ 1. Feature Extraction            │
+│    dmesg: 20+ Panic 模式正则      │
+│    vmcore: drgn 内核对象提取      │
+│    → CrashFeature                │
+└────────────┬─────────────────────┘
+             ▼
+┌──────────────────────────────────┐
+│ 2. Root Cause Abstraction        │
+│    28 条专家规则 + 4 层分层推断   │
+│    + LLM 协同推理 (可选)         │
+│    → RootCauseResult             │
+│    → retrieval_query (6层融合)   │
+└────────────┬─────────────────────┘
+             ▼
+┌──────────────────────────────────┐
+│ 3. Four-Stage Retrieval          │
+│    ┌─ Recall: 向量 Top-100       │
+│    ├─ Filter: 子系统/版本/类型   │
+│    ├─ Rerank: BGE-Reranker-v2   │
+│    └─ LLM Judge: 因果关联评分   │
+│    → Top-N Matched Patches      │
+└────────────┬─────────────────────┘
+             ▼
+┌──────────────────────────────────┐
+│ 4. Report Generation             │
+│    Markdown/JSON 报告 + LLM 解释  │
+│    含因果链 + 评分依据            │
+└──────────────────────────────────┘
+```
+
+---
+
+## 3. 技术创新点
+
+### 3.1 对称 Root Cause Embedding ⭐ 核心创新
+
+这是解决 **"宕机现象 ≠ commit 描述"语义鸿沟** 的关键设计：
+
+```text
+离线侧 (Commit)                          在线侧 (宕机日志)
+     │                                         │
+CommitInfo → CrashFeature 映射           dmesg → CrashFeature
+     │                                         │
+     ▼                                         ▼
+同一个 RootCauseAnalyzer.analyze()   同一个 RootCauseAnalyzer.analyze()
+     │                                         │
+     ▼                                         ▼
+build_retrieval_query()              build_retrieval_query()
+(6层语义融合)                        (6层语义融合)
+     │                                         │
+     ▼                                         ▼
+  BGE-M3 编码 → Milvus             BGE-M3 编码 → Milvus Search
+```
+
+两端使用完全相同的分析引擎，确保检索时 query 和 document 在相同的语义空间中。
+
+### 3.2 四阶段检索架构
+
+| 阶段 | 方法 | 作用 | 候选集 |
+|------|------|------|--------|
+| **Recall** | Milvus/FAISS 向量检索 | 快速召回语义相关 commit | Top-100 |
+| **Filter** | 子系统/版本/Bug类型硬过滤 | 剔除不相关候选 | ~50-80 |
+| **Rerank** | BGE-Reranker-v2 Cross-encoder | 深度语义匹配重排 | Top-20 |
+| **LLM Judge** | LLM 因果关联评分 | 最终精准排序 | Top-3~5 |
+
+### 3.3 领域知识深度融合
+
+- **28 条专家规则**: 覆盖 NULL pointer / UAF / deadlock / race condition 等
+- **10 种 Bug 模式**: 完整知识图谱 (症状 → 根因 → 修复模式 → 检测工具)
+- **6 种锁类型 + 5 种死锁模式 + 8 条锁排序规则**
+- **7 个子系统交互图**: 层级关系 + 耦合关系 + 调用关系
+
+### 3.4 多模态输入支持
+
+- **dmesg 文本日志**: 20+ Panic 模式正则 + LLM 深度分析 + Call Trace 提取
+- **vmcore 内存镜像**: drgn 调试器集成，寄存器/内核对象/调用栈重建
+- **问题描述**: 自然语言描述 → LLM 特征提取
+
+---
 
 ## 4. 技术栈
 
-| 领域 | 技术选型 |
-| :--- | :--- |
-| **Backend** | Python 3.12, FastAPI, SQLAlchemy, PostgreSQL |
-| **AI / LLM** | DeepSeek-R1, Qwen2.5 |
-| **Embedding** | BGE-M3 (支持多模态语义) |
-| **Rerank** | BGE-Reranker-v2 |
-| **Vector DB** | Milvus |
-| **Kernel Tooling** | drgn, PyDriller, crash |
-| **Infrastructure** | Docker, Redis (Cache) |
-
-## 5. 检索算法亮点
-
-1.  **语义非对称性解决**: 通过 Root Cause Abstraction 模块，将繁杂的宕机日志抽象为结构化的内核概念（Kernel Concept），消除日志与补丁描述之间的表述鸿沟。
-2.  **四阶段检索架构**:
-    *   **Rule Filter**: 基于子系统与内核版本的硬过滤。
-    *   **Milvus Recall**: 快速召回语义相关的 Top-100 Commit。
-    *   **BGE Rerank**: 对候选集进行精准深度排序。
-    *   **LLM Judge**: 利用大模型从因果关联角度进行最终评分。
-3.  **专家知识融合**: 引入内核专家经验库（Knowledge Base），辅助识别锁竞争、UAF、空指针等典型内存错误。
-
-## 6. 前端架构
-
-### 6.1 技术选型
-
-| 领域 | 技术 |
-|------|------|
-| **框架** | Vue 3 (Composition API) |
-| **UI 组件库** | Element Plus (暗色主题) |
-| **构建工具** | Vite 6 |
-| **状态管理** | Pinia + pinia-plugin-persistedstate |
-| **路由** | Vue Router 4 |
-| **HTTP 客户端** | Axios (请求/响应拦截、自动重试) |
-| **图表** | ECharts 5 + vue-echarts |
-| **Markdown 渲染** | marked |
-| **代码高亮** | highlight.js |
-| **时间处理** | dayjs |
-
-### 6.2 页面结构
-
-| 路由 | 页面 | 说明 |
-|------|------|------|
-| `/` | Dashboard | 系统仪表盘 — 统计概览、图表、快速入口 |
-| `/analyze` | CrashAnalysis | 宕机日志分析 — 提交日志、查看分析进度和结果 |
-| `/knowledge` | KnowledgeBase | 补丁知识库 — 搜索/浏览百万级 Commit |
-| `/history` | History | 分析历史 — 查看/管理历史分析记录 |
-
-### 6.3 前端特性
-
-- **暗色专业主题**: 针对运维/内核开发者场景的暗色 UI
-- **实时轮询**: 提交分析后自动轮询任务状态 (1.5s 间隔)
-- **状态持久化**: 最近 10 条分析结果缓存在 localStorage
-- **响应式布局**: 支持桌面端和平板端
-- **API 代理**: Vite 开发服务器自动代理 `/api` 到后端
-- **速率限制提示**: 请求过频时自动弹出提示
-- **代码分割**: 生产构建按模块拆分 vendor chunks
-- **Diff 语法高亮**: 补丁 Diff 预览高亮显示
-
-### 6.4 前端启动
-
-```bash
-# 进入前端目录
-cd frontend
-
-# 安装依赖
-npm install
-
-# 开发模式启动 (默认 http://localhost:5173)
-npm run dev
-
-# 生产构建
-npm run build
-
-# 预览生产构建
-npm run preview
-```
-
-### 6.5 与后端 API 的连接
-
-前端通过 Vite 代理连接到后端 FastAPI 服务:
-
-```
-开发环境:
-  浏览器 → Vite Dev Server (:5173) → FastAPI (:8000)
-  /api/* 请求自动代理到 http://127.0.0.1:8000
-
-生产环境:
-  浏览器 → Nginx → 静态文件 (Vue dist)
-                 → /api/* → FastAPI (:8000)
-```
-
-前端 API 客户端配置在 `frontend/src/api/client.js`:
-- 自动添加请求追踪 ID (`X-Request-ID`)
-- 统一错误处理 (429/500/网络错误自动通知)
-- 30 秒请求超时
-
-## 7. 开发规范
-
-*   **Type Hints**: 所有函数必须标注类型。
-*   **Logging**: 统一使用 `loguru`，禁止使用 `print()`。
-*   **Exception**: 业务异常需继承 `BaseBusinessException`。
-*   **Format**: 遵循 Black (代码格式) 与 Ruff (静态检查)。
+| 领域 | 技术选型 | 说明 |
+|:---|:---|:---|
+| **后端框架** | Python 3.12 + FastAPI | 异步高性能 API |
+| **大语言模型** | DeepSeek / Qwen / OpenAI 兼容 | 可切换多种 LLM |
+| **Embedding** | BGE-M3 (BAAI/bge-m3) | 1024 维，中英双语，8192 tokens |
+| **Reranker** | BGE-Reranker-v2-m3 | Cross-encoder 深度语义匹配 |
+| **向量数据库** | Milvus Lite + FAISS | 双后端，自动降级 |
+| **Git 挖掘** | PyDriller | 流式遍历，O(1) 内存 |
+| **内核调试** | drgn | vmcore 解析，内核对象提取 |
+| **前端** | Vue 3 + Element Plus + ECharts | 暗色专业主题 |
+| **状态管理** | Pinia | 前端分析/搜索状态 |
+| **基础设施** | Docker Compose | App + Milvus + Redis 一键部署 |
+| **缓存** | Redis | 任务状态 + 查询缓存 |
 
 ---
+
+## 5. 项目结构
+
+```text
+core-linuxcommit/
+├── src/                            # Python 后端源代码
+│   ├── api/                        # FastAPI 接口层
+│   │   ├── routers/                # analyze / search / stats 路由
+│   │   ├── schemas/                # Pydantic 请求/响应模型
+│   │   ├── middleware/             # CORS / 计时 / 限流 / 日志中间件
+│   │   ├── dependencies/           # 依赖注入
+│   │   └── storage/                # Redis 任务存储
+│   ├── analyzer/                   # 宕机分析核心
+│   │   ├── dmesg/                  # dmesg 日志正则解析 (20+ Panic 模式)
+│   │   ├── vmcore/                 # vmcore drgn 解析
+│   │   ├── rootcause/              # 根因抽象 (28 条专家规则 + LLM)
+│   │   ├── models/                 # CrashFeature / RootCauseResult
+│   │   └── pipeline/               # 分析流水线编排
+│   ├── collector/                  # 离线 Commit 采集
+│   │   ├── git/                    # PyDriller 仓库遍历
+│   │   ├── parser/                 # Commit message/diff 解析
+│   │   ├── subsystem/              # 子系统识别 (28 个)
+│   │   ├── bugtype/                # Bug 类型识别 (21 种)
+│   │   ├── analysis/               # 锁/RCU/refcount 高级分析
+│   │   └── models/                 # CommitInfo 数据模型
+│   ├── indexer/                    # 向量化与索引
+│   │   ├── embedding/              # BGE-M3 编码器 (GPU 加速)
+│   │   ├── milvus/                 # Milvus + FAISS 双后端
+│   │   └── pipeline/               # ★ 对称 Root Cause Embedding
+│   ├── retriever/                  # 在线检索核心
+│   │   ├── recall/                 # 向量召回 (Top-K)
+│   │   ├── filter/                 # 子系统/版本/类型规则过滤
+│   │   ├── rerank/                 # BGE-Reranker-v2 + LLM Judge
+│   │   └── pipeline/               # fast/standard/deep 三种模式
+│   ├── generator/                  # 报告生成
+│   │   ├── llm/                    # DeepSeek/Qwen/OpenAI 统一接口
+│   │   ├── prompt/                 # 场景化 Prompt 模板 + Few-shot
+│   │   └── report/                 # Markdown/JSON 报告格式化
+│   ├── knowledge/                  # 内核领域知识库
+│   │   ├── bug_patterns/           # 10 种 Bug 模式知识图谱
+│   │   ├── lock_rules/             # 6 锁类型 + 5 死锁模式
+│   │   └── subsystem_graph/        # 7 子系统交互关系
+│   ├── services/                   # 业务逻辑编排 (端到端诊断)
+│   ├── models/                     # 全局数据模型
+│   └── common/                     # 日志 / 异常 / 工具函数
+├── frontend/                       # Vue 3 前端
+│   └── src/
+│       ├── views/                  # Dashboard / CrashAnalysis / KnowledgeBase / History
+│       ├── components/             # AppLayout
+│       ├── api/                    # Axios API 客户端
+│       ├── stores/                 # Pinia 状态管理
+│       ├── router/                 # Vue Router 路由
+│       └── utils/                  # 格式化 / 错误处理
+├── scripts/                        # 运维脚本
+│   ├── start-dev.sh                # 一键启动 (后端 + 前端)
+│   └── index_all_commits.py        # 全量 Commit 索引 (断点续跑)
+├── configs/                        # 配置文件
+│   └── config.yaml                 # 统一应用配置 (LLM/Milvus/Redis/Server)
+├── docker/                         # Docker 部署
+│   ├── Dockerfile                  # Python 3.12-slim
+│   └── docker-compose.yml          # App + Milvus + Redis
+├── tests/                          # 测试
+│   ├── conftest.py                  # Pytest fixtures
+│   ├── fixtures/                   # 10 种宕机日志样本
+│   └── test_integration.py         # 集成测试
+├── .env.example                    # 环境变量模板
+├── requirements.txt                # Python 依赖
+└── README.md                       # 本文档
+```
+
+---
+
+## 6. 快速开始
+
+### 6.1 环境要求
+
+- **Python**: 3.12+
+- **Node.js**: 18+ (前端开发)
+- **Git**: 2.x
+- **Linux 内核仓库**: 本地 clone (用于 Commit 采集)
+- **GPU** (可选): CUDA 兼容 GPU 可大幅加速 Embedding 编码
+
+### 6.2 安装
+
+```bash
+# 1. 克隆项目
+git clone <repo-url>
+cd core-linuxcommit
+
+# 2. 创建虚拟环境
+python3 -m venv venv
+source venv/bin/activate
+
+# 3. 安装依赖
+pip install -r requirements.txt
+
+# 4. 配置环境变量
+cp .env.example .env
+# 编辑 .env，填入真实的 OPENAI_API_KEY
+# (从 https://platform.deepseek.com/api_keys 获取)
+
+# 5. 安装前端依赖 (可选)
+cd frontend && npm install && cd ..
+```
+
+### 6.3 索引 Linux 内核 Commit
+
+```bash
+# 确认 Linux 内核仓库路径
+ls /path/to/linux/.git
+
+# 先小规模测试 (1000 条)
+python scripts/index_all_commits.py \
+  --repo-path /path/to/linux \
+  --limit 1000
+
+# 确认流程无误后，大规模索引 (建议 10 万起步)
+python scripts/index_all_commits.py \
+  --repo-path /path/to/linux \
+  --limit 100000 \
+  --batch-size 1000
+
+# 如需断点续跑:
+python scripts/index_all_commits.py \
+  --repo-path /path/to/linux \
+  --limit 100000 \
+  --resume
+```
+
+### 6.4 启动服务
+
+```bash
+# 方式 1: 一键启动脚本 (后端 + 前端)
+bash scripts/start-dev.sh
+
+# 方式 2: 分别启动
+# 终端 1 — 后端
+python -m src.main
+
+# 终端 2 — 前端
+cd frontend && npm run dev
+```
+
+服务启动后：
+- **前端界面**: http://localhost:5173
+- **API 文档**: http://localhost:8000/api/docs (Swagger)
+- **健康检查**: http://localhost:8000/health
+
+### 6.5 Docker 部署
+
+```bash
+cd docker
+docker-compose up -d
+# 启动 App + Milvus + Redis 三个服务
+```
+
+---
+
+## 7. API 文档
+
+### 7.1 核心接口
+
+| 方法 | 路径 | 说明 |
+|:---|:---|:---|
+| `POST` | `/api/v1/analyze` | 提交宕机日志，异步分析，返回 task_id |
+| `GET` | `/api/v1/analyze/{task_id}` | 查询分析任务状态与结果 |
+| `GET` | `/api/v1/analyze?page=1&page_size=20` | 列出历史分析任务 |
+| `POST` | `/api/v1/search` | 搜索补丁知识库 |
+| `GET` | `/api/v1/search/{commit_id}` | 获取单个 Commit 详情 |
+| `GET` | `/api/v1/search/subsystems/list` | 列出所有子系统 |
+| `GET` | `/api/v1/search/bug-types/list` | 列出所有 Bug 类型 |
+| `GET` | `/api/v1/stats` | 获取系统概览统计 |
+
+### 7.2 使用示例
+
+#### 提交宕机日志分析
+
+```bash
+curl -X POST http://localhost:8000/api/v1/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "log_content": "BUG: unable to handle kernel NULL pointer dereference at 0000000000000008\n...",
+    "log_type": "dmesg",
+    "kernel_version": "6.1.0",
+    "top_k": 5,
+    "enable_llm_explanation": true
+  }'
+```
+
+响应:
+```json
+{
+  "task_id": "task_a1b2c3d4e5f6",
+  "status": "running",
+  "created_at": "2026-06-22T10:00:00Z"
+}
+```
+
+#### 查询分析结果
+
+```bash
+curl http://localhost:8000/api/v1/analyze/task_a1b2c3d4e5f6
+```
+
+响应:
+```json
+{
+  "task_id": "task_a1b2c3d4e5f6",
+  "status": "completed",
+  "progress": 1.0,
+  "result": {
+    "analysis_mode": "real",
+    "root_cause": {
+      "root_cause": "null_pointer_dereference",
+      "subsystem": "mm",
+      "confidence": 0.92,
+      "summary": "空指针解引用，未做有效性检查即访问指针成员",
+      "key_symptoms": ["NULL pointer dereference", "unable to handle kernel NULL pointer"]
+    },
+    "matched_patches": [
+      {
+        "rank": 1,
+        "commit": {
+          "commit_id": "a1b2c3d4e5f6...",
+          "title": "mm: fix NULL pointer dereference in slub allocator",
+          "subsystem": "mm",
+          "bug_type": "null_pointer"
+        },
+        "relevance_score": 0.95,
+        "match_reason": "该补丁在 slub 分配器中添加空指针检查，直接修复了崩溃路径"
+      }
+    ],
+    "elapsed_ms": 1850
+  }
+}
+```
+
+#### 搜索补丁
+
+```bash
+curl -X POST http://localhost:8000/api/v1/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "NULL pointer dereference in memory management",
+    "top_k": 10,
+    "subsystem": "mm",
+    "page": 1,
+    "page_size": 20
+  }'
+```
+
+---
+
+## 8. 前端界面
+
+| 页面 | 路由 | 功能 |
+|:---|:---|:---|
+| **Dashboard** | `/` | 系统仪表盘 — 统计概览、图表、快速入口 |
+| **CrashAnalysis** | `/analyze` | 宕机日志分析 — 提交日志，查看分析进度和结果 |
+| **KnowledgeBase** | `/knowledge` | 补丁知识库 — 搜索/浏览已索引的 Commit |
+| **History** | `/history` | 分析历史 — 查看/管理历史分析记录 |
+
+### 前端特性
+
+- **暗色专业主题**: 针对运维/内核开发者场景
+- **实时轮询**: 提交分析后自动轮询任务状态 (1.5s 间隔)
+- **Diff 语法高亮**: 补丁 Diff 预览 highlight.js 高亮
+- **响应式布局**: 支持桌面端和平板端
+- **API 代理**: Vite 开发服务器自动代理 `/api` 到后端
+
+---
+
+## 9. 开发指南
+
+### 9.1 代码规范
+
+| 规范 | 工具 | 说明 |
+|:---|:---|:---|
+| **类型注解** | mypy / built-in | 所有函数必须标注参数和返回类型 |
+| **日志** | loguru | 统一使用 `logger.info/warning/error`，禁止 `print()` |
+| **异常** | BaseBusinessException | 业务异常继承统一基类 |
+| **格式化** | Black | 代码自动格式化 |
+| **静态检查** | Ruff | 代码质量检查 |
+
+### 9.2 运行测试
+
+```bash
+# 安装测试依赖
+pip install pytest pytest-asyncio pytest-cov
+
+# 运行集成测试 (跳过 LLM)
+SKIP_API_KEY_CHECK=1 python tests/test_integration.py
+
+# 运行全部测试
+SKIP_API_KEY_CHECK=1 python -m pytest tests/ -v
+
+# 生成覆盖率报告
+SKIP_API_KEY_CHECK=1 python -m pytest tests/ --cov=src --cov-report=html
+```
+
+### 9.3 添加新的 Bug 模式
+
+编辑 `src/knowledge/bug_patterns/__init__.py`:
+
+```python
+BUG_PATTERNS["new_bug_type"] = {
+    "name": "New Bug Type",
+    "severity": "HIGH",
+    "symptoms": ["symptom1", "symptom2"],
+    "root_causes": ["cause1", "cause2"],
+    "fix_patterns": ["pattern1", "pattern2"],
+    "detection_tools": ["KASAN", "lockdep"],
+    "kernel_configs": ["CONFIG_DEBUG_..."],
+}
+```
+
+### 9.4 添加新的专家规则
+
+编辑 `src/analyzer/rootcause/__init__.py`，在 `EXPERT_RULES` 中添加新规则。
+
+---
+
+## 10. 性能指标
+
+### 目标指标
+
+| 指标 | 目标值 | 说明 |
+|:---|:---|:---|
+| **Top-3 命中率** | ≥ 60% | 基于 Fixes: 标签的 ground truth 测试 |
+| **检索延迟** | < 3s (standard) / < 100ms (fast) | 端到端查询延迟 |
+| **Commit 索引量** | 100 万+ | 支持全量 Linux kernel commit |
+| **API 响应** | < 500ms | 统计/搜索接口响应时间 |
+| **内存占用** | < 8GB | 含 FAISS 索引驻留 |
+| **并发支持** | 50+ QPS | FastAPI 异步处理 |
+
+### 检索模式对比
+
+| 模式 | Recall | Filter | Rerank | LLM Judge | 延迟 |
+|:---|:---|:---|:---|:---|:---|
+| **fast** | ✅ Top-50 | ✅ | ❌ | ❌ | < 100ms |
+| **standard** | ✅ Top-100 | ✅ | ✅ BGE | ❌ | < 1s |
+| **deep** | ✅ Top-200 | ✅ | ✅ BGE | ✅ LLM | 2-10s |
+
+---
+
+## 11. 容错与降级设计
+
+系统在多个层面实现了自动降级，确保在各种环境下都能提供基本服务：
+
+| 组件 | 主方案 | 降级方案 | 触发条件 |
+|:---|:---|:---|:---|
+| **向量库** | Milvus Lite | FAISS 本地索引 | Milvus 不可用 |
+| **LLM** | DeepSeek API | 规则引擎生成解释 | API Key 未配置 / 超时 |
+| **Embedding** | BGE-M3 真实向量 | Mock 随机向量 | 模型权重未下载 |
+| **任务存储** | Redis | 内存字典 + 线程锁 | Redis 连接失败 |
+| **API 数据** | 真实向量检索 | Mock 数据降级 | 向量库为空 |
+
+---
+
+## 许可证
+
+MIT License
+
+---
+
 *© 2026 Core.LinuxCommit Project Team*
