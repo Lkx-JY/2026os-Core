@@ -192,7 +192,8 @@ async def search_commits(
 
     ★ 自动检测: 向量库有数据时使用真实语义检索, 否则回退 Mock
     """
-    if _is_index_ready():
+    using_real = _is_index_ready()
+    if using_real:
         logger.info(f"使用真实向量检索: query='{request.query}'")
         # ★ 真实向量检索
         all_results = _search_real(
@@ -259,6 +260,7 @@ async def search_commits(
         page=request.page,
         page_size=request.page_size,
         results=commit_infos,
+        analysis_mode="real" if using_real else "mock",
         facets=facets,
     )
 

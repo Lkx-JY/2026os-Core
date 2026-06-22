@@ -1,0 +1,19 @@
+list_del corruption. prev->next should be ffff8881045a3c00, but was ffff8881045a3d00 (LIST_POISON1)
+------------[ cut here ]------------
+kernel BUG at lib/list_debug.c:56!
+invalid opcode: 0000 [#1] SMP NOPTI
+CPU: 4 PID: 6789 Comm: insmod Not tainted 6.1.0-17-amd64 #1 Debian 6.1.69-1
+Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.2-1 04/01/2014
+RIP: 0010:__list_del_entry_valid+0x7c/0xa0
+Code: 48 8b 32 48 39 c6 75 39 48 8b 50 08 48 39 f2 75 48 b8 01 00 00 00 c3 48 89 fe 48 c7 c7 08 59 1c 82 e8 91 e3 f1 ff 0f 0b <0f> 0b 48 89 fe 48 c7 c7 38 59 1c 82
+Call Trace:
+ <TASK>
+ __list_del_entry+0x12/0x20
+ process_one_work+0x20c/0x400
+ worker_thread+0x50/0x3e0
+ kthread+0xd3/0x100
+ ret_from_fork+0x2c/0x50
+ </TASK>
+Modules linked in: target_module(O+) nf_conntrack nfnetlink
+---[ end trace 0000000000000000 ]---
+Kernel panic - not syncing: Fatal exception

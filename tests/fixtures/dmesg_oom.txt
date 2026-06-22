@@ -1,0 +1,34 @@
+kworker/2:0 invoked oom-killer: gfp_mask=0x140cca(GFP_HIGHUSER_MOVABLE|__GFP_COMP), order=0, oom_score_adj=0
+CPU: 2 PID: 4567 Comm: kworker/2:0 Not tainted 6.1.0-18-amd64 #1 Debian 6.1.76-1
+Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.2-1 04/01/2014
+Workqueue: events netlink_sock_destruct_work
+Call Trace:
+ dump_stack_lvl+0x48/0x70
+ dump_header+0x4c/0x220
+ oom_kill_process+0x89/0x120
+ out_of_memory+0x23c/0x510
+ __alloc_pages_slowpath+0x8f7/0xbc0
+ __alloc_pages+0x2e3/0x340
+ alloc_pages_current+0x9c/0x120
+ __page_cache_alloc+0x74/0xa0
+ filemap_fault+0x34b/0x960
+ __do_fault+0x39/0x120
+ do_fault+0x251/0x4e0
+ __handle_mm_fault+0x605/0xdb0
+ handle_mm_fault+0xb4/0x2e0
+ do_user_addr_fault+0x1d9/0x690
+ exc_page_fault+0x7b/0x170
+ asm_exc_page_fault+0x27/0x30
+
+Mem-Info:
+active_anon:489216 inactive_anon:12384 isolated_anon:0
+ active_file:234 inactive_file:0 isolated_file:0
+ unevictable:0 dirty:0 writeback:0
+ slab_reclaimable:5234 slab_unreclaimable:8934
+ mapped:1234 shmem:456 pagetables:2345
+Node 0 DMA32 free:0kB min:4096kB low:5120kB high:6144kB
+Node 0 Normal free:2048kB min:8192kB low:10240kB high:12288kB
+Node 0 DMA32: 0*4kB 0*8kB 0*16kB 0*32kB 0*64kB 0*128kB 0*256kB 0*512kB 0*1024kB 0*2048kB = 0kB
+Node 0 Normal: 128*4kB (UME) 64*8kB (UME) 32*16kB (UME) 0*32kB 0*64kB 0*128kB 0*256kB 0*512kB 0*1024kB 0*2048kB = 1536kB
+Out of memory: Killed process 8901 (myapp) total-vm:1048576kB, anon-rss:524288kB, file-rss:0kB, shmem-rss:0kB, UID:1000
+Kernel panic - not syncing: Out of memory and no killable processes

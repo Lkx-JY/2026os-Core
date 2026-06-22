@@ -89,7 +89,8 @@ async def get_stats(config: dict = Depends(get_config)) -> StatsResponse:
     """
     real = _get_real_stats()
 
-    if real.get("has_real_data"):
+    has_real_data = real.get("has_real_data", False)
+    if has_real_data:
         logger.info(f"使用真实统计数据: {real['total_commits']} 条向量")
         subsystems = _get_real_subsystems()
         bug_types = _get_real_bug_types()
@@ -127,6 +128,7 @@ async def get_stats(config: dict = Depends(get_config)) -> StatsResponse:
             {"name": "unknown", "count": 0, "description": "待索引"},
         ],
         vector_db_size=vector_db_size,
+        analysis_mode="real" if has_real_data else "mock",
         uptime_seconds=time.time() - _START_TIME,
         avg_analysis_ms=1850.5,
     )

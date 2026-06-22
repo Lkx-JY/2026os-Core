@@ -158,6 +158,18 @@ def main():
         print(f"         最后 commit: {progress.get('last_hash', 'N/A')}")
         print(f"         最后日期:   {progress.get('last_date', 'N/A')}")
 
+        # ★ P0-3 修复: 使用进度中的 last_date 作为 since 起点
+        if progress.get("last_date") and not args.since:
+            # 将 last_date 向前偏移 1 天，覆盖同一天内可能遗漏的 commit
+            from datetime import timedelta
+            last_dt = datetime.fromisoformat(progress["last_date"][:10])
+            args.since = (last_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+            print(f"         自动设置 --since={args.since} (基于进度恢复)")
+
+        # 保存 last_hash 用于精确定位
+        if progress.get("last_hash"):
+            print(f"         将从 {progress['last_hash'][:12]} 之后继续")
+
     # ── Step 1: 加载编码器 (预热模型) ──────────────────────────────
     print("\n" + "=" * 60)
     print("[Step 1/3] 加载 BGE-M3 编码器...")
@@ -209,6 +221,9 @@ def main():
     to_date = datetime.fromisoformat(args.to) if args.to else None
     only_no_merge = not args.include_merge
 
+    # ★ P0-3 修复: 断点续跑 — 使用 last_hash 跳过已索引的 commit
+    resume_last_hash = progress.get("last_hash") if args.resume else None
+
     # 初始化向量库
     total_before = get_index_count()
     print(f"  索引前向量数: {total_before}")
@@ -231,6 +246,18 @@ def main():
 
         for commit in commit_stream:
             total_collected += 1
+
+            # ★ P0-3 修复: 跳过断点之前已索引的 commit
+            if resume_last_hash is not None:
+                if commit.commit_hash == resume_last_hash:
+                    # 找到了断点，此 commit 上次已索引，从下一个开始
+                    last_hash_str = resume_last_hash[:12]
+                    resume_last_hash = None
+                    print(f"  [resume] 已跳过 {total_collected - 1} 条已索引 commit, "
+                          f"从 {last_hash_str} 之后继续")
+                    continue  # 跳过此 commit (上次已处理)
+                continue  # 跳过此 commit (断点之前)
+
             batch.append(commit)
 
             if len(batch) >= args.batch_size:

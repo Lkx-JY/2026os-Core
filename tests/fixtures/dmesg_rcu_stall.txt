@@ -1,0 +1,29 @@
+INFO: rcu_sched self-detected stall on CPU
+	3-....: (6000 ticks this GP) idle=0x1ac/1/0x4000000000000000 softirq=23456/23456 fqs=1234
+	 (t=6000 jiffies g=12345 q=6789)
+NMI backtrace for cpu 3
+CPU: 3 PID: 0 Comm: swapper/3 Not tainted 6.6.0-rc7+ #1
+Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.2-1 04/01/2014
+RIP: 0010:rcu_check_callbacks+0x10/0x180
+Code: 48 89 e5 41 57 41 56 41 55 41 54 53 48 83 ec 10 65 48 8b 04 25 00 00 00 00 48 89 45 e8
+RSP: 0018:ffff9e8c00c03f08 EFLAGS: 00000246
+Call Trace:
+ <IRQ>
+ update_process_times+0x69/0xa0
+ tick_sched_timer+0x64/0xc0
+ __hrtimer_run_queues+0x10b/0x300
+ hrtimer_interrupt+0x107/0x250
+ __sysvec_apic_timer_interrupt+0x69/0x160
+ sysvec_apic_timer_interrupt+0x9a/0xd0
+ </IRQ>
+ <TASK>
+ asm_sysvec_apic_timer_interrupt+0x1b/0x20
+RIP: 0010:default_idle+0x12/0x20
+Code: 48 89 e5 5d c3 66 90 0f 1f 44 00 00 55 48 89 e5 e8 1b 00 00 00 5d c3
+ default_idle_call+0x3c/0x1a0
+ do_idle+0x1ef/0x240
+ cpu_startup_entry+0x1f/0x30
+ start_secondary+0x11e/0x140
+ secondary_startup_64_no_verify+0x10b/0x10b
+ </TASK>
+Kernel panic - not syncing: RCU Stall

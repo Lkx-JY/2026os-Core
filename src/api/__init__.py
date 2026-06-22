@@ -1,5 +1,6 @@
 """FastAPI 应用入口 — API 层初始化与生命周期管理."""
 
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -18,6 +19,9 @@ from .dependencies import load_config
 from ..common.logging import setup_logging, get_logger
 
 logger = get_logger()
+
+# 服务启动时间戳（用于健康检查的 uptime 计算）
+_START_TIME = time.time()
 
 
 @asynccontextmanager
@@ -153,14 +157,13 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["Health"])
     async def health_check():
         """健康检查端点"""
-        import time
         import psutil
         return {
             "status": "healthy",
             "service": "Core.LinuxCommit API",
             "version": "1.0.0",
-            "uptime_seconds": time.time() - __import__("time").time(),
-            "memory_mb": psutil.Process().memory_info().rss / (1024 * 1024),
+            "uptime_seconds": round(time.time() - _START_TIME, 2),
+            "memory_mb": round(psutil.Process().memory_info().rss / (1024 * 1024), 2),
         }
 
     @app.get("/", tags=["Root"])

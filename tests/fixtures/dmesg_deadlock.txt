@@ -1,0 +1,43 @@
+======================================================
+WARNING: possible circular locking dependency detected
+6.6.0-rc5+ #1 Not tainted
+------------------------------------------------------
+kworker/0:1/123 is trying to acquire lock:
+ffff8881005a3c78 (&sb->s_type->i_mutex_key#2){+.+.}-{3:3}, at: ext4_file_write_iter+0x4c/0x1c0
+
+but task is already holding lock:
+ffff8881005a3d28 (&journal->j_checkpoint_mutex){+.+.}-{3:3}, at: jbd2_journal_lock_updates+0xe1/0x1f0
+
+which lock already depends on the new lock.
+
+the existing dependency chain (in reverse order) is:
+
+-> #1 (&journal->j_checkpoint_mutex){+.+.}-{3:3}:
+       __mutex_lock+0x9a/0x840
+       mutex_lock_nested+0x1b/0x30
+       jbd2_journal_flush+0x4a/0x1a0
+       ext4_ioctl+0x20c/0x9b0 [ext4]
+       __x64_sys_ioctl+0x94/0xd0
+       do_syscall_64+0x3b/0xb0
+       entry_SYSCALL_64_after_hwframe+0x44/0xae
+
+-> #0 (&sb->s_type->i_mutex_key#2){+.+.}-{3:3}:
+       __mutex_lock+0x9a/0x840
+       mutex_lock_nested+0x1b/0x30
+       ext4_file_write_iter+0x4c/0x1c0
+       vfs_write+0x2a4/0x410
+       ksys_write+0x6f/0xf0
+       do_syscall_64+0x3b/0xb0
+       entry_SYSCALL_64_after_hwframe+0x44/0xae
+
+other info that might help us debug this:
+ Possible unsafe locking scenario:
+       CPU0                    CPU1
+       ----                    ----
+  lock(&journal->j_checkpoint_mutex);
+                               lock(&sb->s_type->i_mutex_key#2);
+                               lock(&journal->j_checkpoint_mutex);
+  lock(&sb->s_type->i_mutex_key#2);
+
+ *** DEADLOCK ***
+Kernel panic - not syncing: Fatal exception

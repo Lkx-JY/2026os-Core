@@ -1,0 +1,35 @@
+BUG: unable to handle page fault for address: ffff888deadbeef0
+#PF: supervisor write access in kernel mode
+#PF: error_code(0x0002) - not-present page
+PGD 0 P4D 0
+Oops: 0002 [#1] SMP NOPTI
+CPU: 5 PID: 9012 Comm: kworker/5:1 Not tainted 6.1.0-20-amd64 #1 Debian 6.1.85-1
+Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.2-1 04/01/2014
+Workqueue: events vmstat_update
+RIP: 0010:__mod_node_page_state+0x45/0xc0
+Code: 48 8b 47 08 48 8b 4f 10 48 01 c1 48 89 4f 08 48 8b 47 18 48 85 c0 74 0a 48 8b 57 20 48 01 c2 48 89 57 20 <48> 8b 47 00 48 85 c0 74 0a 48 8b 4f 28 48 01 c1
+RSP: 0018:ffffa2d1c0d0fc38 EFLAGS: 00010282
+RAX: ffff888deadbeef0 RBX: 0000000000000000 RCX: 0000000000000001
+RDX: 0000000000000000 RSI: 0000000000000002 RDI: ffff8881a2b3c000
+RBP: ffffa2d1c0d0fc70 R08: 0000000000000000 R09: 0000000000000000
+R10: 0000000000000000 R11: 0000000000000000 R12: 0000000000000001
+R13: ffff8881a2b3c000 R14: 0000000000000002 R15: ffff8881a2b3c000
+FS:  0000000000000000(0000) GS:ffff8883fbd00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: ffff888deadbeef0 CR3: 0000000102a50000 CR4: 0000000000350ee0
+Call Trace:
+ <TASK>
+ mod_node_page_state+0x65/0xc0
+ __mod_lruvec_page_state+0x8c/0xf0
+ __inc_node_page_state+0x4b/0x80
+ page_add_new_anon_rmap+0x6f/0xa0
+ do_anonymous_page+0x222/0x5b0
+ __handle_mm_fault+0x733/0xdb0
+ handle_mm_fault+0xb4/0x2e0
+ do_user_addr_fault+0x1d9/0x690
+ exc_page_fault+0x7b/0x170
+ asm_exc_page_fault+0x27/0x30
+ </TASK>
+CR2: ffff888deadbeef0
+---[ end trace 0000000000000000 ]---
+Kernel panic - not syncing: Fatal exception

@@ -143,7 +143,7 @@ EXPERT_RULES: List[Dict[str, Any]] = [
             "slab double free",
         ],
         "panic_patterns": [
-            r"KASAN: double-free or invalid free in",
+            r"KASAN: double-free",
             r"kernel BUG at mm/slub.c",
             r"Slab double-free detected",
         ],
@@ -189,7 +189,7 @@ EXPERT_RULES: List[Dict[str, Any]] = [
             "list_add double add", "list corruption",
         ],
         "panic_patterns": [
-            r"list_del corruption.*->next is LIST_POISON",
+            r"list_del corruption.*(LIST_POISON|prev->next|next->prev)",
             r"list_add corruption.*prev->next should be",
             r"list_add double add",
         ],
@@ -966,13 +966,72 @@ def build_retrieval_query(
 # ============================================================================
 
 def _try_load_knowledge() -> Dict[str, Any]:
-    """尝试加载知识模块，如果不可用则返回降级结果"""
-    knowledge = {
+    """加载知识模块，返回可用的知识查询接口
+
+    返回值包含实际可调用的知识查询函数，而非布尔标志。
+    每个模块独立加载，单个模块失败不影响其他模块。
+    """
+    knowledge: Dict[str, Any] = {
         "bug_patterns_available": False,
         "lock_rules_available": False,
         "subsystem_graph_available": False,
+        # 实际的知识查询函数引用
+        "search_bug_by_symptom": None,
+        "get_bug_pattern": None,
+        "get_all_bug_types": None,
+        "analyze_lock_usage": None,
+        "match_deadlock_pattern": None,
+        "get_lock_type": None,
+        "get_subsystem_info": None,
+        "get_related_subsystems": None,
+        "get_all_subsystems": None,
+        "list_subsystems_by_bug_type": None,
     }
-    # 知识模块当前为骨架，保留导入接口用于后续扩展
+
+    # ── 加载 Bug 模式知识库 ──────────────────────────────────────
+    try:
+        from ...knowledge.bug_patterns import (
+            search_bug_by_symptom,
+            get_bug_pattern,
+            get_all_bug_types,
+        )
+        knowledge["bug_patterns_available"] = True
+        knowledge["search_bug_by_symptom"] = search_bug_by_symptom
+        knowledge["get_bug_pattern"] = get_bug_pattern
+        knowledge["get_all_bug_types"] = get_all_bug_types
+    except ImportError:
+        pass
+
+    # ── 加载锁规则知识库 ────────────────────────────────────────
+    try:
+        from ...knowledge.lock_rules import (
+            analyze_lock_usage,
+            match_deadlock_pattern,
+            get_lock_type,
+        )
+        knowledge["lock_rules_available"] = True
+        knowledge["analyze_lock_usage"] = analyze_lock_usage
+        knowledge["match_deadlock_pattern"] = match_deadlock_pattern
+        knowledge["get_lock_type"] = get_lock_type
+    except ImportError:
+        pass
+
+    # ── 加载子系统关系图 ────────────────────────────────────────
+    try:
+        from ...knowledge.subsystem_graph import (
+            get_subsystem_info,
+            get_related_subsystems,
+            get_all_subsystems,
+            list_subsystems_by_bug_type,
+        )
+        knowledge["subsystem_graph_available"] = True
+        knowledge["get_subsystem_info"] = get_subsystem_info
+        knowledge["get_related_subsystems"] = get_related_subsystems
+        knowledge["get_all_subsystems"] = get_all_subsystems
+        knowledge["list_subsystems_by_bug_type"] = list_subsystems_by_bug_type
+    except ImportError:
+        pass
+
     return knowledge
 
 
@@ -1151,6 +1210,69 @@ class RootCauseAnalyzer:
 
         return None
 
+    def _apply_knowledge_enhancement(
+        self,
+        result: RootCauseResult,
+        feature: CrashFeature,
+        trace_analysis: Dict[str, Any],
+    ) -> None:
+        """★ 知识库增强分析 — 使用领域知识增强根因推理结果
+
+        在 Layer 2 (调用栈结构推断) 之后调用，利用 knowledge/ 下的
+        bug_patterns / lock_rules / subsystem_graph 增强分析结果。
+
+        增强维度:
+        1. Bug 模式匹配 → 提升置信度、补充修复模式
+        2. 锁使用分析 → 检测调用栈中的锁问题
+        3. 子系统关系推断 → 扩展影响范围
+        """
+        k = self.knowledge  # 已在 __init__ 中通过 _try_load_knowledge() 加载
+
+        # ── 1. Bug 模式匹配 — 增强置信度 ──────────────────────────
+        if k.get("bug_patterns_available") and k.get("search_bug_by_symptom"):
+            if feature.panic_msg:
+                bug_info = k["search_bug_by_symptom"](feature.panic_msg)
+                if bug_info:
+                    result.extra_info["knowledge_bug_match"] = bug_info
+                    if not result.root_cause:
+                        # 知识库作为主要推断来源（Layer 2.5）
+                        result.root_cause = bug_info[0]["name"]
+                        result.bug_type = bug_info[0]["bug_type"]
+                        result.score = min(0.90, bug_info[0]["match_score"] * 0.2 + 0.6)
+                        result.reason = f"匹配到知识库中的 {bug_info[0]['name']} 模式"
+                        result.causal_chain.append(
+                            f"Knowledge Base: {bug_info[0]['name']} "
+                            f"(score={bug_info[0]['match_score']})"
+                        )
+                    else:
+                        # 已有根因时，知识库提供双重确认
+                        result.score = max(result.score, 0.85)
+
+        # ── 2. 锁规则分析 — 补充调用栈中的锁使用信息 ──────────────
+        if k.get("lock_rules_available") and k.get("analyze_lock_usage"):
+            if feature.call_trace:
+                lock_analysis = k["analyze_lock_usage"](feature.call_trace)
+                if lock_analysis.get("lock_types") or lock_analysis.get("potential_issues"):
+                    result.extra_info["lock_analysis"] = lock_analysis
+                    if lock_analysis.get("potential_issues"):
+                        for issue in lock_analysis["potential_issues"]:
+                            result.causal_chain.append(f"Lock Issue: {issue}")
+
+        # ── 3. 子系统关系推断 — 扩展影响范围 ──────────────────────
+        if k.get("subsystem_graph_available"):
+            if feature.subsystem and feature.subsystem != "unknown":
+                if k.get("get_subsystem_info"):
+                    subsystem_info = k["get_subsystem_info"](feature.subsystem)
+                    if subsystem_info:
+                        result.extra_info["subsystem_info"] = subsystem_info
+                if k.get("get_related_subsystems"):
+                    related_subsystems = k["get_related_subsystems"](feature.subsystem)
+                    if related_subsystems and len(related_subsystems) > 1:
+                        result.extra_info["related_subsystems"] = related_subsystems
+                        result.causal_chain.append(
+                            f"Related Subsystems: {', '.join(related_subsystems)}"
+                        )
+
     def analyze(self, feature: CrashFeature) -> RootCauseResult:
         """执行分层根因分析
 
@@ -1210,6 +1332,9 @@ class RootCauseAnalyzer:
                     result.causal_chain.append(
                         f"RCU Functions in trace: {', '.join(trace_analysis['rcu_functions'][:5])}"
                     )
+
+        # ★ Step 2.5: 知识库增强分析 — 领域知识 (bug_patterns + lock_rules + subsystem_graph)
+        self._apply_knowledge_enhancement(result, feature, trace_analysis)
 
         # Layer 3: Bug 类型通用抽象
         if not result.root_cause:

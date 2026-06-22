@@ -1,0 +1,45 @@
+[  123.456789] NMI watchdog: BUG: soft lockup - CPU#3 stuck for 23s! [kworker/3:1:1234]
+[  123.456790] Modules linked in: nf_conntrack nfnetlink bridge stp llc nls_iso8859_1 nls_cp437 vfat fat ext4 mbcache jbd2
+[  123.456800] CPU: 3 PID: 1234 Comm: kworker/3:1 Not tainted 6.1.0-15-amd64 #1 Debian 6.1.66-1
+[  123.456810] Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.2-debian-1.16.2-1 04/01/2014
+[  123.456820] RIP: 0010:native_queued_spin_lock_slowpath+0x1a2/0x1e0
+[  123.456830] Code: 48 89 c2 48 89 c1 48 c1 ea 20 83 e0 1f 48 0f a3 c2 73 0a 65 48 8b 04 25 00 00 00 00 48 8b 00 48 85 c0 74 e2 <0f> 0b e9 2e ff ff ff
+[  123.456840] RSP: 0018:ffff9e8c00e07c38 EFLAGS: 00000202
+[  123.456850] RAX: 0000000000000001 RBX: ffff8f3c1a2b4000 RCX: 0000000000000001
+[  123.456860] RDX: 0000000000000001 RSI: 0000000000000001 RDI: ffff8f3c1a2b40c8
+[  123.456870] RBP: ffff9e8c00e07c80 R08: 0000000000000000 R09: 0000000000000000
+[  123.456880] R10: 0000000000000000 R11: 0000000000000000 R12: ffff8f3c1a2b40c8
+[  123.456890] R13: 0000000000000001 R14: ffff8f3c1a2b4000 R15: 0000000000000000
+[  123.456900] FS:  0000000000000000(0000) GS:ffff8f3c3fb80000(0000) knlGS:0000000000000000
+[  123.456910] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  123.456920] CR2: 00007f8a3c2b1000 CR3: 0000000102a3c000 CR4: 0000000000350ee0
+[  123.456930] Call Trace:
+[  123.456940]  <IRQ>
+[  123.456950]  _raw_spin_lock_irqsave+0x3b/0x50
+[  123.456960]  try_to_wake_up+0x2a1/0x5e0
+[  123.456970]  default_wake_function+0x12/0x20
+[  123.456980]  autoremove_wake_function+0x3a/0x70
+[  123.456990]  __wake_up_common+0x7b/0x140
+[  123.457000]  __wake_up_common_lock+0x7c/0xc0
+[  123.457010]  ep_autoremove_wake_function+0x1e/0x30
+[  123.457020]  __wake_up+0x13/0x20
+[  123.457030]  eventpoll_poll_callback+0xb8/0x140
+[  123.457040]  __wake_up_common+0x7b/0x140
+[  123.457050]  __wake_up_common_lock+0x7c/0xc0
+[  123.457060]  __wake_up_sync_key+0x1b/0x30
+[  123.457070]  sock_def_readable+0x3f/0x70
+[  123.457080]  tcp_data_ready+0x3d/0x160
+[  123.457090]  tcp_rcv_established+0x598/0x680
+[  123.457100]  tcp_v4_do_rcv+0x13b/0x200
+[  123.457110]  tcp_v4_rcv+0xc4d/0xd80
+[  123.457120]  ip_protocol_deliver_rcu+0x3c/0x200
+[  123.457130]  ip_local_deliver_finish+0x73/0xa0
+[  123.457140]  ip_local_deliver+0x75/0xf0
+[  123.457150]  ip_rcv+0xb9/0xd0
+[  123.457160]  __netif_receive_skb_one_core+0x89/0xa0
+[  123.457170]  process_backlog+0xa4/0x170
+[  123.457180]  __napi_poll+0x2e/0x170
+[  123.457190]  net_rx_action+0x2a4/0x370
+[  123.457200]  __do_softirq+0xd4/0x2f6
+[  123.457210]  </IRQ>
+[  123.457220] Kernel panic - not syncing: softlockup: hung tasks

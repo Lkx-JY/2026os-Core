@@ -38,21 +38,30 @@ def _get_store() -> RedisTaskStore:
 _memory_tasks: dict[str, dict] = {}
 
 
+def _serialize_value(value):
+    """递归转换值为 JSON 可序列化格式 — 处理嵌套 Pydantic/datetime"""
+    if hasattr(value, 'model_dump'):
+        return _serialize_value(value.model_dump())
+    elif hasattr(value, 'dict'):
+        return _serialize_value(value.dict())
+    elif isinstance(value, list):
+        return [_serialize_value(item) for item in value]
+    elif isinstance(value, dict):
+        return {k: _serialize_value(v) for k, v in value.items()}
+    elif isinstance(value, datetime):
+        return value.isoformat()
+    else:
+        return value
+
+
 def _save_task(task_id: str, data: dict) -> None:
     """保存任务到 Redis，回退到内存"""
     store = _get_store()
     # 获取现有数据并合并
     existing = store.get_task(task_id) or _memory_tasks.get(task_id, {})
     
-    # 转换 Pydantic 模型为字典
-    serializable_data = {}
-    for key, value in data.items():
-        if hasattr(value, 'model_dump'):
-            serializable_data[key] = value.model_dump()
-        elif hasattr(value, 'dict'):
-            serializable_data[key] = value.dict()
-        else:
-            serializable_data[key] = value
+    # 递归转换 Pydantic 模型和 datetime 为 JSON 可序列化格式
+    serializable_data = _serialize_value(data)
     
     existing.update(serializable_data)
     
@@ -222,6 +231,7 @@ def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
         _save_task(task_id, {
             "status": "completed",
             "progress": 1.0,
+            "analysis_mode": "mock",
             "root_cause": root_cause,
             "matched_patches": matched_patches,
             "steps": steps,
@@ -397,6 +407,7 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
         _save_task(task_id, {
             "status": "completed",
             "progress": 1.0,
+            "analysis_mode": "real",
             "root_cause": root_cause_info,
             "matched_patches": matched_patches,
             "steps": steps,
@@ -593,6 +604,7 @@ async def get_analysis_status(task_id: str) -> TaskStatusResponse:
         result = AnalyzeResponse(
             task_id=task_id,
             status="completed",
+            analysis_mode=task.get("analysis_mode", "real"),
             root_cause=task.get("root_cause"),
             matched_patches=task.get("matched_patches", []),
             analysis_steps=task.get("steps", []),

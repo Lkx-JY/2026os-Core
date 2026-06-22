@@ -6,6 +6,7 @@ from typing import Optional
 from datetime import datetime
 
 import redis
+from pydantic import BaseModel
 
 
 class RedisTaskStore:
@@ -183,21 +184,31 @@ class RedisTaskStore:
             return []
 
     def _serialize_data(self, data: dict) -> dict:
-        """序列化数据中的 datetime 对象"""
+        """递归序列化数据中的 datetime / Pydantic BaseModel 对象
+
+        处理嵌套结构中的:
+        - datetime → ISO 8601 字符串
+        - BaseModel → model_dump() 后递归序列化
+        - list → 递归处理每个元素
+        - dict → 递归处理每个值
+        """
         result = {}
         for key, value in data.items():
-            if isinstance(value, datetime):
-                result[key] = value.isoformat()
-            elif isinstance(value, list):
-                result[key] = [
-                    item.isoformat() if isinstance(item, datetime) else item
-                    for item in value
-                ]
-            elif isinstance(value, dict):
-                result[key] = self._serialize_data(value)
-            else:
-                result[key] = value
+            result[key] = self._serialize_value(value)
         return result
+
+    def _serialize_value(self, value):
+        """递归序列化单个值"""
+        if isinstance(value, BaseModel):
+            return self._serialize_data(value.model_dump())
+        elif isinstance(value, datetime):
+            return value.isoformat()
+        elif isinstance(value, list):
+            return [self._serialize_value(item) for item in value]
+        elif isinstance(value, dict):
+            return self._serialize_data(value)
+        else:
+            return value
 
 
 # ── 全局单例 ────────────────────────────────────────

@@ -23,6 +23,10 @@ class AnalyzeResponse(BaseModel):
     raw_log_summary: Optional[str] = Field(
         default=None, description="原始日志摘要"
     )
+    analysis_mode: str = Field(
+        default="real",
+        description="real | mock — 标识本次分析使用的是真实RAG Pipeline还是模拟数据"
+    )
     created_at: Optional[datetime] = Field(default=None)
     completed_at: Optional[datetime] = Field(default=None)
     elapsed_ms: Optional[int] = Field(default=None, description="总耗时 (毫秒)")
@@ -35,6 +39,10 @@ class SearchResponse(BaseModel):
     page: int
     page_size: int
     results: list[CommitInfo] = Field(default_factory=list)
+    analysis_mode: str = Field(
+        default="real",
+        description="real | mock — 标识搜索数据来源"
+    )
     facets: Optional[dict] = Field(
         default=None, description="分面统计 (subsystem/bug_type 分布)"
     )
@@ -55,6 +63,10 @@ class StatsResponse(BaseModel):
     subsystems: list[dict] = Field(default_factory=list, description="子系统统计")
     bug_types: list[dict] = Field(default_factory=list, description="Bug 类型统计")
     vector_db_size: int = Field(default=0, description="向量库大小")
+    analysis_mode: str = Field(
+        default="real",
+        description="real | mock — 标识统计数据来源"
+    )
     uptime_seconds: float = Field(default=0, description="服务运行秒数")
     avg_analysis_ms: float = Field(default=0, description="平均分析耗时 (ms)")
 
