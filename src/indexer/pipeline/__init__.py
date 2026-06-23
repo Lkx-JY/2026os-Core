@@ -342,6 +342,7 @@ def index_commits(
     dim: int = 1024,
     use_root_cause: bool = True,
     use_commit_builder: bool = True,
+    skip_save: bool = False,
 ) -> int:
     """离线流程：对 Commit 进行批量向量化并存入向量库
 
@@ -409,8 +410,9 @@ def index_commits(
         if progress_callback:
             progress_callback(end, total)
 
-    # 5. 持久化 (FAISS 模式)
-    client.save()
+    # 5. 持久化 (FAISS 模式) — skip_save=True 时由调用方负责
+    if not skip_save:
+        client.save()
 
     return inserted
 

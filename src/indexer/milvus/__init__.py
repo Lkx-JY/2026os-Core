@@ -90,8 +90,8 @@ class FAISSBackend:
     """基于 FAISS 的本地向量检索引擎
 
     支持:
-    - IndexFlatIP (内积搜索，配合归一化向量 = 余弦相似度)
-    - IndexIVFFlat (倒排索引，大规模数据加速)
+    - IndexFlatIP: 精确搜索，小数据量 (< 1000 条) 默认使用
+    - IndexIVFFlat: 近似搜索，大数据量自动切换，10-50x 搜索加速
     - 标量字段存储 (JSON 元数据)
     - 持久化 (save/load)
 
@@ -101,37 +101,97 @@ class FAISSBackend:
         >>> result = backend.search(query_vec, top_k=10)
     """
 
-    def __init__(self, dim: int = 1024, index_type: str = "flat"):
+    # 自动切换到 IVFFlat 的向量数阈值
+    IVF_SWITCH_THRESHOLD = 1000
+    DEFAULT_NPROBE = 32
+
+    def __init__(self, dim: int = 1024, index_type: str = "auto"):
         """
         Args:
             dim: 向量维度
-            index_type: 索引类型 — "flat" (精确) 或 "ivf" (近似)
+            index_type: 索引类型 — "auto"(自动选择), "flat"(精确), "ivf"(近似)
         """
         self.dim = dim
         self.index_type = index_type
         self.index = None
         self.metadata_store: List[Dict[str, Any]] = []
         self._id_counter = 0
-        self._vectors_np: Optional[np.ndarray] = None  # 纯 numpy 降级时的向量存储
+        self._vectors_np: Optional[np.ndarray] = None  # 训练前缓冲 / 纯 numpy 降级
+        self._is_trained = False  # IVFFlat 是否已完成 k-means 训练
+        self._nlist = 0           # 聚类中心数
+        self._nprobe = self.DEFAULT_NPROBE
+
+    def _should_use_ivf(self, n_total: int) -> bool:
+        """判断是否应使用 IVFFlat"""
+        if self.index_type == "flat":
+            return False
+        if self.index_type == "ivf":
+            return True
+        return n_total >= self.IVF_SWITCH_THRESHOLD
 
     def _ensure_index(self, n_total: int = 0):
         """确保索引已初始化
 
-        FAISS 本地模式始终使用 IndexFlatIP (精确检索，无需训练)。
-        IVF 索引仅用于 Milvus 生产模式。
+        auto 模式: <1000 条用 FlatIP(精确)，>=1000 条自动切 IVFFlat(近似,10-50x加速)
         """
         if self.index is not None:
             return
 
         try:
             import faiss
-            # ★ FAISS 本地模式始终使用 FlatIP (精确内积搜索)
-            # 对于开发测试和小规模验证场景，FlatIP 足够快且无需训练
-            self.index = faiss.IndexFlatIP(self.dim)
+
+            if self._should_use_ivf(n_total):
+                self._nlist = max(100, min(4096, int((max(n_total, 100)) ** 0.5 * 2)))
+                quantizer = faiss.IndexFlatIP(self.dim)
+                self.index = faiss.IndexIVFFlat(
+                    quantizer, self.dim, self._nlist, faiss.METRIC_INNER_PRODUCT
+                )
+                self._is_trained = False
+                self.index_type = "ivf"
+            else:
+                self.index = faiss.IndexFlatIP(self.dim)
+                self._is_trained = True
+                self.index_type = "flat"
 
         except ImportError:
-            # FAISS 不可用时的纯 numpy 降级实现
             self.index = None
+
+    def _try_train_ivf(self):
+        """对缓冲的向量做 k-means 训练（仅 IVFFlat 需要）"""
+        if self._is_trained or self.index is None:
+            return
+        if not hasattr(self.index, 'is_trained'):
+            self._is_trained = True
+            return
+
+        try:
+            import faiss
+            if self.index.is_trained:
+                self._is_trained = True
+                return
+
+            total = len(self.metadata_store)
+            min_train = max(self._nlist * 39, 100)
+            if total < min_train or self._vectors_np is None:
+                return
+
+            if self._vectors_np.shape[0] >= min_train:
+                self.index.train(self._vectors_np)
+                self._is_trained = True
+                if hasattr(self.index, 'nprobe'):
+                    self.index.nprobe = self._nprobe
+        except Exception:
+            # 训练失败 → 降级为 FlatIP
+            try:
+                import faiss
+                old_vectors = self._vectors_np
+                self.index = faiss.IndexFlatIP(self.dim)
+                self.index_type = "flat"
+                self._is_trained = True
+                if old_vectors is not None:
+                    self.index.add(old_vectors)
+            except Exception:
+                pass
 
     def insert(
         self,
@@ -140,12 +200,10 @@ class FAISSBackend:
     ) -> List[int]:
         """插入向量和元数据
 
-        Args:
-            vectors: shape (n, dim) 的 float32 向量
-            metadata: 每条向量的元数据
-
-        Returns:
-            分配的 ID 列表
+        自动缓冲策略:
+        - IVFFlat 训练前: 向量暂存 _vectors_np，积攒够后一次训练+批量灌入
+        - FlatIP / 已训练: 直接 add()
+        - FAISS 不可用: numpy 累积存储
         """
         vectors = np.asarray(vectors, dtype=np.float32)
         n = vectors.shape[0]
@@ -157,25 +215,41 @@ class FAISSBackend:
         norms = np.linalg.norm(vectors, axis=1, keepdims=True)
         vectors = vectors / (norms + 1e-8)
 
-        self._ensure_index(n_total=n)
+        current_total = self.count()
+        self._ensure_index(n_total=current_total + n)
 
         ids = list(range(self._id_counter, self._id_counter + n))
         self._id_counter += n
 
-        if self.index is not None:
-            self.index.add(vectors)
-        else:
-            # 纯 numpy 降级: 累积存储向量
-            if self._vectors_np is None:
-                self._vectors_np = vectors
-            else:
-                self._vectors_np = np.vstack([self._vectors_np, vectors])
-
-        # 存储元数据
+        # 先存元数据（无论索引状态）
         for i, meta in enumerate(metadata):
             meta_copy = dict(meta)
             meta_copy["_internal_id"] = ids[i]
             self.metadata_store.append(meta_copy)
+
+        if self.index is not None:
+            if not self._is_trained:
+                # IVFFlat 训练前: 缓冲向量
+                if self._vectors_np is None:
+                    self._vectors_np = vectors.copy()
+                else:
+                    self._vectors_np = np.vstack([self._vectors_np, vectors])
+
+                # 积攒够了自动触发训练 + 批量灌入
+                if self._vectors_np.shape[0] >= self._nlist * 39:
+                    self._try_train_ivf()
+                    if self._is_trained and self.index is not None:
+                        self.index.add(self._vectors_np)
+                        self._vectors_np = None
+            else:
+                # FlatIP 或已训练: 直接插入
+                self.index.add(vectors)
+        else:
+            # 纯 numpy 降级: 累积存储
+            if self._vectors_np is None:
+                self._vectors_np = vectors.copy()
+            else:
+                self._vectors_np = np.vstack([self._vectors_np, vectors])
 
         return ids
 
@@ -209,18 +283,19 @@ class FAISSBackend:
 
         actual_k = min(top_k, total)
 
-        if self.index is not None:
-            # 显式转换类型以匹配 FAISS 接口要求
+        if self.index is not None and self._is_trained:
+            # FAISS 已训练 → 直接搜索
             x = query.astype(np.float32)
             distances, indices = self.index.search(x, actual_k)
             distances = distances[0].tolist()
             indices = indices[0].tolist()
         else:
-            # 纯 numpy 降级: 暴力计算余弦相似度
-            if self._vectors_np is None:
+            # IVFFlat 未训练 / FAISS 不可用 → numpy 暴力搜索
+            vecs = self._vectors_np
+            if vecs is None:
                 return SearchResult(search_time_ms=(time.time() - t0) * 1000)
 
-            sims = np.dot(self._vectors_np, query.T).flatten()
+            sims = np.dot(vecs, query.T).flatten()
             top_indices = np.argsort(sims)[::-1][:actual_k]
             distances = sims[top_indices].tolist()
             indices = top_indices.tolist()
@@ -305,6 +380,9 @@ class FAISSBackend:
                 "dim": self.dim,
                 "index_type": self.index_type,
                 "id_counter": self._id_counter,
+                "is_trained": self._is_trained,
+                "nlist": self._nlist,
+                "nprobe": self._nprobe,
                 "metadata": _make_serializable(self.metadata_store),
             }, f, ensure_ascii=False, indent=2)
 
@@ -323,7 +401,12 @@ class FAISSBackend:
                 self.dim = data.get("dim", self.dim)
                 self.index_type = data.get("index_type", self.index_type)
                 self._id_counter = data.get("id_counter", 0)
+                self._is_trained = data.get("is_trained", True)  # 旧索引默认为 flat/已训练
+                self._nlist = data.get("nlist", 0)
+                self._nprobe = data.get("nprobe", self.DEFAULT_NPROBE)
                 self.metadata_store = data.get("metadata", [])
+                if self.index is not None and hasattr(self.index, 'nprobe') and self._nprobe:
+                    self.index.nprobe = self._nprobe
         except FileNotFoundError:
             pass
 
@@ -339,6 +422,8 @@ class FAISSBackend:
             "dimension": self.dim,
             "total_vectors": self.count(),
             "has_index": self.index is not None,
+            "is_trained": self._is_trained,
+            "nlist": self._nlist,
         }
 
 
@@ -1010,8 +1095,8 @@ class MilvusClient:
                 drop_if_exists=drop_if_exists,
             )
         else:
-            # FAISS 无需显式创建，设置 index_type
-            self._faiss.index_type = "flat" if index_type == "FLAT" else "ivf"
+            # FAISS 无需显式创建，index_type="auto" 自动根据数据量选择 FlatIP/IVFFlat
+            self._faiss.index_type = "auto"
 
     def insert(
         self,

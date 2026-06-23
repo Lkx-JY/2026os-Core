@@ -279,6 +279,7 @@ def main():
                     create_collection=(total_before + total_indexed == 0),
                     use_root_cause=not args.no_root_cause,
                     use_commit_builder=not args.no_commit_builder,
+                    skip_save=True,  # 不逐批写盘，最后统一持久化
                 )
                 total_indexed += n
 
@@ -320,6 +321,7 @@ def main():
                 create_collection=(total_before + total_indexed == 0),
                 use_root_cause=not args.no_root_cause,
                 use_commit_builder=not args.no_commit_builder,
+                skip_save=True,  # 最后统一持久化
             )
             total_indexed += n
 
