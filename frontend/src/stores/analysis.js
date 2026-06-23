@@ -66,10 +66,17 @@ export const useAnalysisStore = defineStore('analysis', () => {
   }
 
   function startPolling(taskId) {
+    // 如果已经在轮询此任务，先停止
+    stopPolling(taskId)
+
     let attempts = 0       // 总轮询次数
     let errorCount = 0     // 连续错误次数（成功后重置）
+    let stopped = false     // ★ 防止竞态：立即 poll 中 stopped 了但定时器还没创建
 
     const poll = async () => {
+      // 已被停止则跳过（防止定时器回调堆积）
+      if (stopped) return
+
       try {
         const status = await analysisApi.getStatus(taskId)
 
@@ -82,16 +89,22 @@ export const useAnalysisStore = defineStore('analysis', () => {
 
           if (status.status === 'completed') {
             tasks.value[taskId].result = status.result
+            stopped = true
             stopPolling(taskId)
             return
           } else if (status.status === 'failed') {
+            stopped = true
             stopPolling(taskId)
             return
           }
         }
       } catch (err) {
-        errorCount++
+        // 429 (rate limit) 不算错误，跳过不计数
+        if (err?.response?.status !== 429) {
+          errorCount++
+        }
         if (errorCount >= 5) {
+          stopped = true
           stopPolling(taskId)
           if (tasks.value[taskId]) {
             tasks.value[taskId].status = 'failed'
@@ -103,6 +116,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
 
       attempts++
       if (attempts >= MAX_POLL_ATTEMPTS) {
+        stopped = true
         stopPolling(taskId)
         if (tasks.value[taskId] && tasks.value[taskId].status === 'running') {
           tasks.value[taskId].status = 'failed'
@@ -111,9 +125,13 @@ export const useAnalysisStore = defineStore('analysis', () => {
       }
     }
 
-    // 立即检查一次，然后定时轮询
+    // 立即检查一次
     poll()
-    pollingTimers.value[taskId] = setInterval(poll, POLL_INTERVAL_MS)
+
+    // ★ 如果立即检查时已经 stopped（任务无需轮询），不创建定时器
+    if (!stopped) {
+      pollingTimers.value[taskId] = setInterval(poll, POLL_INTERVAL_MS)
+    }
   }
 
   function stopPolling(taskId) {
