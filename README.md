@@ -193,7 +193,7 @@ build_retrieval_query()              build_retrieval_query()
 | 领域 | 技术选型 | 说明 |
 |:---|:---|:---|
 | **后端框架** | Python 3.12 + FastAPI | 异步高性能 API |
-| **大语言模型** | DeepSeek / Qwen / OpenAI 兼容 | 可切换多种 LLM |
+| **大语言模型** | DeepSeek / Qwen / OpenAI 兼容 + Ollama 本地 | 用户可选付费 API 或免费本地模型 |
 | **Embedding** | BGE-M3 (BAAI/bge-m3) | 1024 维，中英双语，8192 tokens |
 | **Reranker** | BGE-Reranker-v2-m3 | Cross-encoder 深度语义匹配 |
 | **向量数据库** | Milvus Lite + FAISS | 双后端，自动降级 |
@@ -284,6 +284,7 @@ core-linuxcommit/
 - **Python**: 3.12+
 - **Node.js**: 18+ (前端开发)
 - **Git**: 2.x
+- **Ollama** (推荐): 免费本地大模型，用户无需 API Key 即可使用 LLM 分析
 - **Linux 内核仓库**: 本地 clone (用于 Commit 采集)
 - **GPU** (可选): CUDA 兼容 GPU 可大幅加速 Embedding 编码
 
@@ -301,12 +302,17 @@ source venv/bin/activate
 # 3. 安装依赖
 pip install -r requirements.txt
 
-# 4. 配置环境变量
-cp .env.example .env
-# 编辑 .env，填入真实的 OPENAI_API_KEY
-# (从 https://platform.deepseek.com/api_keys 获取)
+# 4. 安装 Ollama (推荐 — 免费本地大模型)
+curl -fsSL https://ollama.com/install.sh | sh
+# 或 snap: sudo snap install ollama
+ollama pull qwen2.5:7b     # 下载模型 (~4.7GB，仅首次)
+ollama serve &              # 启动 Ollama 后台服务
 
-# 5. 安装前端依赖 (可选)
+# 5. 配置环境变量 (可选)
+cp .env.example .env
+# ★ API Key 不再强制要求 — 用户可在 Web 前端自行提供，或使用 Ollama 免费模型
+
+# 6. 安装前端依赖
 cd frontend && npm install && cd ..
 ```
 
@@ -557,7 +563,7 @@ BUG_PATTERNS["new_bug_type"] = {
 | 组件 | 主方案 | 降级方案 | 触发条件 |
 |:---|:---|:---|:---|
 | **向量库** | Milvus Lite | FAISS 本地索引 | Milvus 不可用 |
-| **LLM** | DeepSeek API | 规则引擎生成解释 | API Key 未配置 / 超时 |
+| **LLM** | DeepSeek API（用户自备 Key）| Ollama 本地模型 → 规则引擎 | 用户未提供 Key / API 超时 |
 | **Embedding** | BGE-M3 真实向量 | Mock 随机向量 | 模型权重未下载 |
 | **任务存储** | Redis | 内存字典 + 线程锁 | Redis 连接失败 |
 | **API 数据** | 真实向量检索 | Mock 数据降级 | 向量库为空 |
