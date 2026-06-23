@@ -11,22 +11,22 @@
 
 Usage:
     # 测试: 索引前 100 条 commit
-    python scripts/index_all_commits.py --repo-path /home/lkx/文档/内核比赛/linux --limit 100
+    python scripts/index_all_commits.py --repo-path /path/to/linux --limit 100
 
     # 小规模验证: 索引前 10000 条
-    python scripts/index_all_commits.py --repo-path /home/lkx/文档/内核比赛/linux --limit 10000
+    python scripts/index_all_commits.py --repo-path /path/to/linux --limit 10000
 
     # 全量索引 (需要 GPU, 预计 10+ 小时)
-    python scripts/index_all_commits.py --repo-path /home/lkx/文档/内核比赛/linux --limit 0
+    python scripts/index_all_commits.py --repo-path /path/to/linux --limit 0
 
     # 按日期范围索引
-    python scripts/index_all_commits.py --repo-path /home/lkx/文档/内核比赛/linux --since 2024-01-01
+    python scripts/index_all_commits.py --repo-path /path/to/linux --since 2024-01-01
 
     # 不使用 Root Cause 对称分析 (加速但降低语义质量)
-    python scripts/index_all_commits.py --repo-path /home/lkx/文档/内核比赛/linux --no-root-cause
+    python scripts/index_all_commits.py --repo-path /path/to/linux --no-root-cause
 
     # 使用 GPU 加速
-    CUDA_VISIBLE_DEVICES=0 python scripts/index_all_commits.py --repo-path /home/lkx/文档/内核比赛/linux --limit 10000
+    CUDA_VISIBLE_DEVICES=0 python scripts/index_all_commits.py --repo-path /path/to/linux --limit 10000
 """
 
 import sys

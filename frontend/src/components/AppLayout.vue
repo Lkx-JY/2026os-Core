@@ -54,6 +54,18 @@
         </ul>
       </div>
 
+      <!-- API Key 配置入口 -->
+      <div v-show="!sidebarCollapsed" class="sidebar-key-status" @click="showKeyDialog = true">
+        <div class="key-status-header">
+          <el-icon size="14"><Key /></el-icon>
+          <span>API Key 设置</span>
+        </div>
+        <div class="key-status-text">
+          <span class="status-dot" :class="apiKeyConfigured ? 'online' : 'offline'"></span>
+          <span class="text-sm text-muted">{{ apiKeyConfigured ? '已配置' : '未配置 — 点击设置' }}</span>
+        </div>
+      </div>
+
       <!-- 底部状态 -->
       <div class="sidebar-footer" v-show="!sidebarCollapsed">
         <div class="server-status">
@@ -108,6 +120,37 @@
         </router-view>
       </div>
     </main>
+
+    <!-- API Key 配置弹窗 -->
+    <el-dialog
+      v-model="showKeyDialog"
+      title="API Key 配置"
+      width="420px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <p class="text-muted mb-4" style="font-size: 13px;">
+        输入管理员提供的 <strong>AUTH_API_KEY</strong>，用于访问分析接口。<br/>
+        未配置时分析请求将被服务器拒绝（401）。
+      </p>
+      <el-input
+        v-model="keyInput"
+        type="password"
+        show-password
+        placeholder="请输入 AUTH_API_KEY"
+        clearable
+        @keyup.enter="saveApiKey"
+      />
+      <template #footer>
+        <el-button @click="showKeyDialog = false">取消</el-button>
+        <el-button type="primary" @click="saveApiKey" :disabled="!keyInput.trim()">
+          保存
+        </el-button>
+        <el-button v-if="apiKeyConfigured" type="danger" text @click="clearApiKey">
+          清除
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -119,6 +162,9 @@ import { statsApi } from '@/api/stats'
 const route = useRoute()
 const sidebarCollapsed = ref(false)
 const serverOnline = ref(false)
+const showKeyDialog = ref(false)
+const keyInput = ref('')
+const apiKeyConfigured = ref(false)
 
 const activeMenu = computed(() => {
   const path = route.path
@@ -147,8 +193,30 @@ function openApiDocs() {
   window.open(`${apiBase.replace('/v1', '')}/docs`, '_blank', 'noopener,noreferrer')
 }
 
+function checkApiKey() {
+  const stored = localStorage.getItem('api_key')
+  apiKeyConfigured.value = !!stored
+  if (stored) keyInput.value = stored
+}
+
+function saveApiKey() {
+  const val = keyInput.value.trim()
+  if (!val) return
+  localStorage.setItem('api_key', val)
+  apiKeyConfigured.value = true
+  showKeyDialog.value = false
+}
+
+function clearApiKey() {
+  localStorage.removeItem('api_key')
+  keyInput.value = ''
+  apiKeyConfigured.value = false
+  showKeyDialog.value = false
+}
+
 onMounted(() => {
   checkServerStatus()
+  checkApiKey()
   healthTimer = setInterval(checkServerStatus, 30000) // 每 30s 检查
 })
 
@@ -268,6 +336,34 @@ onBeforeUnmount(() => {
   left: 0;
   color: var(--color-primary);
   font-size: 10px;
+}
+
+/* ── API Key 状态 ────────────────────────────── */
+.sidebar-key-status {
+  padding: 12px 16px;
+  margin: 8px 8px 0 8px;
+  background: rgba(255, 193, 7, 0.06);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 193, 7, 0.15);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.sidebar-key-status:hover {
+  background: rgba(255, 193, 7, 0.12);
+}
+.key-status-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffc107;
+  margin-bottom: 6px;
+}
+.key-status-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* ── 主内容 ──────────────────────────────────── */

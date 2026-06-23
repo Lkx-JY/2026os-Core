@@ -15,6 +15,7 @@ from __future__ import annotations
 import time
 import json
 import re
+import contextvars
 from typing import Optional, List, Dict, Any, Callable, Iterator, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -322,7 +323,53 @@ You MUST output ONLY a valid JSON object, no extra text. Format:
 
 
 # ============================================================================
-# 全局单例
+# 按请求 LLM 配置（contextvars — 支持 async/BackgroundTasks）
+# ============================================================================
+
+_request_llm_config: contextvars.ContextVar = contextvars.ContextVar(
+    "request_llm_config", default=None
+)
+
+
+def set_request_llm_config(
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+    model: Optional[str] = None,
+) -> None:
+    """设置当前请求的 LLM 配置（在 analyze 路由中调用）
+
+    调用后，该请求链路中所有 get_llm_client() 调用都使用此配置。
+    支持 FastAPI BackgroundTasks（contextvars 由 anyio 自动传递）。
+
+    Args:
+        api_key: 用户自己的 LLM API Key（为 None 时使用免费 Ollama）
+        base_url: 自定义 API Base URL
+        model: 自定义模型名称
+    """
+    _request_llm_config.set({
+        "api_key": api_key,
+        "base_url": base_url,
+        "model": model,
+    })
+
+
+_OLLAMA_BASE_URL = "http://localhost:11434/v1"
+_OLLAMA_DEFAULT_MODEL = "qwen2.5:7b"
+
+
+def _create_ollama_client(model: Optional[str] = None) -> LLMClient:
+    """创建 Ollama 本地客户端（免费，无需 API Key）"""
+    return LLMClient(
+        model=model or _OLLAMA_DEFAULT_MODEL,
+        api_key="ollama",                    # Ollama 不校验 Key
+        base_url=_OLLAMA_BASE_URL,
+        timeout=120,                          # 本地模型推理较慢
+        max_retries=1,                        # 本地服务失败不重试
+    )
+
+
+# ============================================================================
+# 全局单例（仅用于非请求场景：索引构建等）
 # ============================================================================
 
 _llm_client: Optional[LLMClient] = None
@@ -333,29 +380,77 @@ def get_llm_client(
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
 ) -> LLMClient:
-    """获取/创建全局 LLM 客户端单例
+    """获取 LLM 客户端
 
-    优先使用传入参数，否则从统一配置中读取。
-    配置来源: 环境变量 OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL
-
-    Args:
-        model: 模型名称 (None=从配置读取)
-        api_key: API Key (None=从配置读取)
-        base_url: API Base URL (None=从配置读取)
+    优先级（从高到低）：
+    1. 函数参数直接传入的 api_key/base_url/model
+    2. 当前请求上下文（通过 set_request_llm_config 设置）
+       - 用户提供了自己的 API Key → 创建付费客户端（用户付费）
+       - 用户未提供 Key → 创建 Ollama 本地客户端（免费）
+    3. 环境变量 OPENAI_API_KEY（向后兼容，用于索引构建等非请求场景）
 
     Returns:
         LLMClient 实例
     """
+    # ── 第1优先级: 直接传入的参数 ──
+    if api_key and api_key.strip():
+        return LLMClient(
+            model=model or "deepseek-chat",
+            api_key=api_key.strip(),
+            base_url=base_url or "https://api.deepseek.com/v1",
+        )
+
+    # ── 第2优先级: 请求上下文 ──
+    req_config = _request_llm_config.get(None)
+    if req_config is not None:
+        user_key = (req_config.get("api_key") or "").strip()
+        if user_key:
+            # 用户提供了自己的 API Key → 用户付费
+            return LLMClient(
+                model=model or req_config.get("model") or "deepseek-chat",
+                api_key=user_key,
+                base_url=(
+                    base_url
+                    or req_config.get("base_url")
+                    or "https://api.deepseek.com/v1"
+                ),
+            )
+        else:
+            # 用户未提供 Key → 使用免费 Ollama 本地模型
+            return _create_ollama_client(
+                model=model or req_config.get("model")
+            )
+
+    # ── 第3优先级: 环境变量（全局单例，向后兼容） ──
     global _llm_client
     if _llm_client is None:
         from ...common.config import get_llm_api_key, get_llm_base_url, get_llm_model
 
-        _llm_client = LLMClient(
-            model=model or get_llm_model(),
-            api_key=api_key or get_llm_api_key(),
-            base_url=base_url or get_llm_base_url(),
-        )
+        env_key = get_llm_api_key()
+        if env_key:
+            _llm_client = LLMClient(
+                model=model or get_llm_model(),
+                api_key=env_key,
+                base_url=base_url or get_llm_base_url(),
+            )
+        else:
+            # 环境变量也没有 → Ollama 兜底
+            _llm_client = _create_ollama_client(model=model or get_llm_model())
     return _llm_client
+
+
+def check_ollama_health() -> bool:
+    """检查 Ollama 服务是否可用"""
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"{_OLLAMA_BASE_URL.rstrip('/v1')}/api/tags",
+            method="GET",
+        )
+        urllib.request.urlopen(req, timeout=3)
+        return True
+    except Exception:
+        return False
 
 
 def reset_llm_client():
@@ -368,4 +463,6 @@ __all__ = [
     "LLMClient",
     "get_llm_client",
     "reset_llm_client",
+    "set_request_llm_config",
+    "check_ollama_health",
 ]

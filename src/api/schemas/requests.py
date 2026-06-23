@@ -24,6 +24,18 @@ class AnalyzeRequest(BaseModel):
     enable_llm_explanation: bool = Field(
         default=True, description="是否启用 LLM 生成分析解释"
     )
+    user_api_key: Optional[str] = Field(
+        default=None,
+        description="用户自己的 LLM API Key（DeepSeek/OpenAI/Qwen）。不填则使用免费本地模型",
+    )
+    user_api_base: Optional[str] = Field(
+        default=None,
+        description="自定义 API Base URL（可选，默认 https://api.deepseek.com/v1）",
+    )
+    user_api_model: Optional[str] = Field(
+        default=None,
+        description="自定义模型名称（可选，默认 deepseek-chat）",
+    )
 
 
 class SearchRequest(BaseModel):

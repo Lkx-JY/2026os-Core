@@ -56,6 +56,40 @@ Call Trace:
           </el-checkbox>
         </el-form-item>
 
+        <!-- ★ 大模型配置 — 用户选择付费方式 -->
+        <el-form-item v-if="form.enable_llm_explanation" label="🤖 大模型配置">
+          <el-card shadow="never" class="llm-config-card">
+            <el-radio-group v-model="form.llm_mode" @change="onLlmModeChange">
+              <el-radio value="free">
+                <span style="font-weight: 500;">🆓 免费本地模型</span>
+                <span class="text-muted text-sm ml-2">不产生费用，准确率稍低（需服务器安装 Ollama）</span>
+              </el-radio>
+              <el-radio value="own_key" class="mt-2">
+                <span style="font-weight: 500;">🔑 使用我自己的 API Key</span>
+                <span class="text-muted text-sm ml-2">高准确率，费用自理</span>
+              </el-radio>
+            </el-radio-group>
+
+            <div v-if="form.llm_mode === 'own_key'" class="mt-3">
+              <el-input
+                v-model="form.user_api_key"
+                type="password"
+                show-password
+                placeholder="sk-xxxxxxxx（支持 DeepSeek / OpenAI / Qwen）"
+                clearable
+              >
+                <template #prepend>API Key</template>
+              </el-input>
+              <div class="text-muted text-sm mt-1" style="line-height: 1.6;">
+                💡 Key 仅本次请求使用，不会存储到服务器。
+                <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">获取 DeepSeek Key →</a>
+                &nbsp;|&nbsp;
+                <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">获取 OpenAI Key →</a>
+              </div>
+            </div>
+          </el-card>
+        </el-form-item>
+
         <el-form-item>
           <el-button
             type="primary"
@@ -300,6 +334,11 @@ const form = reactive({
   kernel_version: '',
   top_k: 5,
   enable_llm_explanation: true,
+  // LLM 配置 — 用户决定付费方式
+  llm_mode: 'free',        // 'free' | 'own_key'
+  user_api_key: '',
+  user_api_base: '',
+  user_api_model: '',
 })
 
 const rules = {
@@ -385,6 +424,14 @@ function loadExample(example) {
   form.log_content = example.content
 }
 
+function onLlmModeChange(mode) {
+  if (mode === 'free') {
+    form.user_api_key = ''
+    form.user_api_base = ''
+    form.user_api_model = ''
+  }
+}
+
 // ── 提交分析 ───────────────────────────────────
 async function submitAnalysis() {
   const valid = await formRef.value?.validate().catch(() => false)
@@ -397,6 +444,9 @@ async function submitAnalysis() {
       kernel_version: form.kernel_version || undefined,
       top_k: form.top_k,
       enable_llm_explanation: form.enable_llm_explanation,
+      user_api_key: form.llm_mode === 'own_key' ? form.user_api_key : undefined,
+      user_api_base: form.llm_mode === 'own_key' ? form.user_api_base || undefined : undefined,
+      user_api_model: form.llm_mode === 'own_key' ? form.user_api_model || undefined : undefined,
     })
 
     router.replace({ path: '/analyze', query: { task: taskId } })
@@ -472,6 +522,19 @@ watch(() => route.query.task, (taskId) => {
 }
 .example-tag:hover {
   transform: translateY(-1px);
+}
+
+/* ── LLM 配置卡片 ────────────────────────────── */
+.llm-config-card {
+  background: rgba(0, 212, 255, 0.03) !important;
+  border: 1px solid rgba(0, 212, 255, 0.12) !important;
+}
+.llm-config-card :deep(.el-radio) {
+  display: flex;
+  align-items: center;
+  height: auto;
+  padding: 4px 0;
+  margin-right: 0;
 }
 
 /* ── 进度区域 ────────────────────────────────── */

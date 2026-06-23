@@ -144,8 +144,9 @@ def get_config() -> Dict[str, Any]:
         llm_config.get("provider") or "deepseek",
     ).strip()
 
-    # ★ 启动时校验 — 用户必须自行配置 API Key
-    api_key = _check_api_key(api_key)
+    # ★ API Key 不再强制校验 — 用户可在前端自行提供 Key 或使用免费本地模型
+    # 保留 _check_api_key 函数供需要时手动调用
+    # api_key 为空时，LLMClient 会自动降级到 Ollama 本地模型或规则引擎
 
     # ── 数据库配置 ────────────────────────────────────
     db_config = yaml_config.get("database", {})

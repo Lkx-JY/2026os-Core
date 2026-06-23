@@ -16,7 +16,7 @@ from ..schemas.entities import (
     CommitInfo,
     AnalysisStep,
 )
-from ..dependencies import get_config, check_index_ready
+from ..dependencies import get_config, check_index_ready, verify_api_key
 from ..storage import get_task_store, RedisTaskStore
 from ...common.logging import get_logger
 
@@ -266,6 +266,14 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
     Step 5 → Multi-stage Ranking (Filter → BGE Rerank)
     """
     steps: list[AnalysisStep] = []
+
+    # ★ 设置请求级 LLM 配置 — 后续所有 get_llm_client() 调用自动使用此配置
+    from ...generator.llm import set_request_llm_config
+    set_request_llm_config(
+        api_key=request.user_api_key,
+        base_url=request.user_api_base,
+        model=request.user_api_model,
+    )
 
     try:
         # ── Step 1: 日志解析 ──────────────────────────────────────
@@ -549,6 +557,7 @@ async def create_analysis(
     request: AnalyzeRequest,
     background_tasks: BackgroundTasks,
     config: dict = Depends(get_config),
+    api_key: str = Depends(verify_api_key),
 ) -> AnalyzeResponse:
     """提交宕机日志进行分析
 

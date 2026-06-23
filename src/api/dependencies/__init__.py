@@ -17,25 +17,25 @@ logger = get_logger()
 # API Key 鉴权 (可选 — 用于生产环境)
 # ============================================================================
 
-API_KEY_ENV = os.environ.get("API_KEY", "")
+AUTH_API_KEY_ENV = os.environ.get("AUTH_API_KEY", "")
 
 
 def verify_api_key(x_api_key: Optional[str] = Header(None)) -> Optional[str]:
-    """验证 API Key — 若未配置 API_KEY 则跳过鉴权
+    """验证 API Key — 若未配置 AUTH_API_KEY 则跳过鉴权
 
     使用方式:
-        @router.get("/protected")
-        async def protected_route(api_key: str = Depends(verify_api_key)):
+        @router.post("/analyze")
+        async def create_analysis(api_key: str = Depends(verify_api_key)):
             ...
     """
-    if not API_KEY_ENV:
-        # 未配置 API_KEY，允许所有请求
+    if not AUTH_API_KEY_ENV:
+        # 未配置 AUTH_API_KEY，允许所有请求（开发模式）
         return None
-    if x_api_key == API_KEY_ENV:
+    if x_api_key == AUTH_API_KEY_ENV:
         return x_api_key
     raise HTTPException(
         status_code=401,
-        detail={"code": "UNAUTHORIZED", "message": "无效的 API Key"},
+        detail={"code": "UNAUTHORIZED", "message": "无效的 API Key，请在设置页面配置正确的 AUTH_API_KEY"},
     )
 
 

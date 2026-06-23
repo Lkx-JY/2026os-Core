@@ -26,28 +26,7 @@ def main():
     reload = os.environ.get("RELOAD", "true").lower() == "true"
     log_level = os.environ.get("LOG_LEVEL", "info")
 
-    # ★ 启动前检查 API Key（委托给 config 模块的统一检查）
-    skip_check = os.environ.get("SKIP_API_KEY_CHECK", "").strip() in ("1", "true", "yes")
-    if not skip_check:
-        from src.common.config import is_api_key_configured
-        if not is_api_key_configured():
-            print("""
-╔══════════════════════════════════════════════════════════╗
-║  ❌ 未配置 OPENAI_API_KEY                               ║
-╠══════════════════════════════════════════════════════════╣
-║  请设置环境变量:                                        ║
-║    export OPENAI_API_KEY=sk-your-api-key-here            ║
-║                                                        ║
-║  API Key 获取:                                          ║
-║    https://platform.deepseek.com/api_keys               ║
-║                                                        ║
-║  ⚠️  费用: 用户自行承担 LLM API 调用费用               ║
-║                                                        ║
-║  跳过检查 (仅本地测试):                                 ║
-║    export SKIP_API_KEY_CHECK=1                          ║
-╚══════════════════════════════════════════════════════════╝
-""")
-            sys.exit(1)
+    # ★ 不再强制要求 OPENAI_API_KEY — 用户可在前端提供自己的 Key 或使用免费本地模型
 
     print(f"""
 ╔══════════════════════════════════════════════════════════╗

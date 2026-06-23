@@ -43,8 +43,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"Embedding model: {config.get('model', {}).get('embedding', 'N/A')}")
     logger.info(f"Vector DB: {config.get('database', {}).get('type', 'N/A')}")
 
-    # ★ API Key 检查 ─────────────────────────────────
-    _check_api_key_on_startup()
+    # ★ 免费模型可用性检查 ──────────────────────────
+    _check_free_model_on_startup()
+
+    # ★ AUTH_API_KEY 检查 (生产环境建议配置) ─────────
+    import os as _os
+    if not _os.environ.get("AUTH_API_KEY", "").strip():
+        logger.warning("⚠️  未配置 AUTH_API_KEY — API 端点无鉴权保护")
+        logger.warning("   生产环境建议设置: export AUTH_API_KEY=your-secret-key")
 
     logger.info("API server ready to accept requests")
     logger.info("=" * 60)
@@ -55,59 +61,38 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Core.LinuxCommit API Server shutting down...")
 
 
-def _check_api_key_on_startup():
-    """启动时检查 API Key 配置
+def _check_free_model_on_startup():
+    """启动时检查免费模型可用性
 
-    跳过检查的场景:
-    - SKIP_API_KEY_CHECK=1 环境变量 (用于本地测试)
-    - OPENAI_API_KEY 已正确配置
-
-    Raises:
-        ValueError: 如果未配置 API Key 且未跳过检查
+    检查顺序:
+    1. Ollama 本地服务是否可用（推荐）
+    2. 环境变量 OPENAI_API_KEY 是否配置了部署者 Key（向后兼容）
+    3. 两者都无 → 降级到规则引擎（仍可正常服务）
     """
     import os
-    import sys
 
-    skip_check = os.environ.get("SKIP_API_KEY_CHECK", "").strip() in ("1", "true", "yes")
+    # 检查 Ollama
+    try:
+        from ..generator.llm import check_ollama_health
+        if check_ollama_health():
+            logger.info("✓ Ollama 本地模型可用（免费，用户无需提供 API Key）")
+            return
+    except Exception:
+        pass
 
-    if skip_check:
-        logger.warning("⚠️  SKIP_API_KEY_CHECK=1 — 跳过 API Key 检查")
-        logger.warning("   LLM 相关功能将无法正常使用")
+    logger.warning("⚠️  Ollama 本地模型不可用")
+
+    # 检查部署者是否配置了 OPENAI_API_KEY（仅用于向后兼容）
+    deployer_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if deployer_key:
+        logger.info("✓ 检测到 OPENAI_API_KEY（向后兼容，部署者付费模式）")
+        logger.warning("   注意: 此模式下所有 LLM 调用将由部署者付费")
         return
 
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-
-    if not api_key:
-        error_msg = (
-            "\n"
-            + "=" * 60 + "\n"
-            + "  ❌ 未配置 OPENAI_API_KEY\n"
-            + "=" * 60 + "\n"
-            + "  请设置环境变量 OPENAI_API_KEY 来配置你的 LLM API Key。\n"
-            + "\n"
-            + "  配置方法:\n"
-            + "    1. 临时设置:\n"
-            + "       export OPENAI_API_KEY=sk-your-api-key-here\n"
-            + "\n"
-            + "    2. 永久设置 (~/.bashrc):\n"
-            + "       export OPENAI_API_KEY=sk-your-api-key-here\n"
-            + "\n"
-            + "    3. 使用 .env 文件:\n"
-            + "       创建 .env 文件并写入:\n"
-            + "       OPENAI_API_KEY=sk-your-api-key-here\n"
-            + "\n"
-            + "  💡 API Key 获取: https://platform.deepseek.com/api_keys\n"
-            + "\n"
-            + "  ⚠️  费用说明: 用户自行承担 LLM API 调用费用。\n"
-            + "     本项目不会记录或上传你的 API Key。\n"
-            + "\n"
-            + "  如需跳过检查 (仅本地测试):\n"
-            + "       export SKIP_API_KEY_CHECK=1\n"
-            + "=" * 60 + "\n"
-        )
-        logger.error(error_msg)
-        sys.stderr.write(error_msg)
-        raise ValueError("请配置 OPENAI_API_KEY 环境变量。详见: https://platform.deepseek.com/api_keys")
+    logger.warning("   → 将使用规则引擎作为 LLM 降级方案")
+    logger.info("💡 安装 Ollama 以获得免费的高质量 LLM 分析:")
+    logger.info("   curl -fsSL https://ollama.com/install.sh | sh")
+    logger.info("   ollama pull qwen2.5:7b")
 
 
 def create_app() -> FastAPI:

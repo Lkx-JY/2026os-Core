@@ -9,6 +9,8 @@ services:
       - ./data:/app/data
       - ./configs:/app/configs
     environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AUTH_API_KEY=${AUTH_API_KEY}
       - MILVUS_HOST=milvus
       - REDIS_HOST=redis
   
