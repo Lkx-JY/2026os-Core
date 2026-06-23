@@ -84,9 +84,12 @@ def _commit_to_info(commit) -> CommitInfo:
         parent_hashes=commit.parents or [],
 
         # PyDriller 原生结构信息
+        # NOTE: commit.in_main_branch / commit.branches 底层调用 git branch --contains，
+        # 在 Linux kernel 这种超大仓库极其缓慢 (每个 commit 几秒到几十秒) 且结果未被下游使用，
+        # 直接跳过以避免性能瓶颈。
         is_merge=commit.merge,
-        in_main_branch=commit.in_main_branch,
-        branches=commit.branches or [],
+        in_main_branch=False,
+        branches=[],
         tags=commit.tags if hasattr(commit, 'tags') else [],
 
         # 文件级结构化变更

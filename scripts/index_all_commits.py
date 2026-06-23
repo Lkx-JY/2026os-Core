@@ -109,6 +109,17 @@ def parse_args():
         default=None,
         help="设备选择: cuda, cpu (默认: 自动检测)",
     )
+    parser.add_argument(
+        "--no-commit-builder",
+        action="store_true",
+        help="禁用 CommitRootCauseBuilder, 使用旧版 RootCauseAnalyzer (用于 A/B 性能对比)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="并行工作进程数 (默认: 1=单进程, 建议: CPU核心数-1)",
+    )
     return parser.parse_args()
 
 
@@ -267,6 +278,7 @@ def main():
                     show_progress=False,
                     create_collection=(total_before + total_indexed == 0),
                     use_root_cause=not args.no_root_cause,
+                    use_commit_builder=not args.no_commit_builder,
                 )
                 total_indexed += n
 
@@ -307,6 +319,7 @@ def main():
                 batch_size=args.encode_batch,
                 create_collection=(total_before + total_indexed == 0),
                 use_root_cause=not args.no_root_cause,
+                use_commit_builder=not args.no_commit_builder,
             )
             total_indexed += n
 
@@ -320,6 +333,7 @@ def main():
                     batch_size=args.encode_batch,
                     create_collection=(total_before + total_indexed == 0),
                     use_root_cause=not args.no_root_cause,
+                    use_commit_builder=not args.no_commit_builder,
                 )
                 total_indexed += n
             except Exception as e:

@@ -109,7 +109,8 @@ class TestIndexPipeline:
             body="This fixes a UAF by adding proper RCU protection.",
         )
         text = prepare_commit_embedding_text(commit, use_root_cause=True)
-        assert "Fix:" in text
+        # 新版 CommitRootCauseBuilder 使用 BugType: 标签 (非旧版 Fix: 标签)
+        assert "BugType:" in text
         assert "use-after-free" in text.lower()
         assert len(text) > 50
 

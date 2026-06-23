@@ -47,6 +47,16 @@ from .rootcause.llm_rootcause import (
     build_root_cause_llm_prompt,
 )
 from .pipeline import run_analysis_pipeline
+from .commit_rules import (
+    RootCauseSummary,
+    CommitRootCauseBuilder,
+    get_builder,
+    reset_builder,
+    build_commit_embedding_text,
+    build_commit_embedding_text_simple,
+    BUG_TEMPLATE,
+    DIFF_RULES,
+)
 
 __all__ = [
     # 数据模型
@@ -86,4 +96,13 @@ __all__ = [
     'build_root_cause_llm_prompt',
     # 流水线
     'run_analysis_pipeline',
+    # Commit 根因分析 — 轻量引擎 (离线索引路径, 替代 RootCauseAnalyzer)
+    'RootCauseSummary',
+    'CommitRootCauseBuilder',
+    'get_builder',
+    'reset_builder',
+    'build_commit_embedding_text',
+    'build_commit_embedding_text_simple',
+    'BUG_TEMPLATE',
+    'DIFF_RULES',
 ]
