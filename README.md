@@ -40,7 +40,7 @@ Linux 内核宕机（Kernel Crash）是云计算和数据中心运维的核心�
 
 ### 解决方案
 
-Core.LinuxCommit 构建了 **四阶段检索增强生成 (RAG) 流水线**：
+project3136859-388917 构建了 **四阶段检索增强生成 (RAG) 流水线**：
 
 ```text
 宕机日志 (dmesg/vmcore)
@@ -209,47 +209,54 @@ build_retrieval_query()              build_retrieval_query()
 ## 5. 项目结构
 
 ```text
-core-linuxcommit/
+project3136859-388917/
 ├── src/                            # Python 后端源代码
 │   ├── api/                        # FastAPI 接口层
 │   │   ├── routers/                # analyze / search / stats 路由
-│   │   ├── schemas/                # Pydantic 请求/响应模型
+│   │   ├── schemas/                # Pydantic 请求/响应模型 (requests/entities/responses)
 │   │   ├── middleware/             # CORS / 计时 / 限流 / 日志中间件
-│   │   ├── dependencies/           # 依赖注入
+│   │   ├── dependencies/           # 依赖注入 (配置加载)
 │   │   └── storage/                # Redis 任务存储
 │   ├── analyzer/                   # 宕机分析核心
-│   │   ├── dmesg/                  # dmesg 日志正则解析 (20+ Panic 模式)
+│   │   ├── dmesg/                  # dmesg 日志正则解析 (20+ Panic 模式 + LLM 深度分析)
 │   │   ├── vmcore/                 # vmcore drgn 解析
-│   │   ├── rootcause/              # 根因抽象 (28 条专家规则 + LLM)
+│   │   ├── drgn/                   # drgn 调试器集成
+│   │   ├── rootcause/              # 根因抽象 (28 条专家规则 + LLM 协同推理)
 │   │   ├── models/                 # CrashFeature / RootCauseResult
-│   │   └── pipeline/               # 分析流水线编排
+│   │   ├── pipeline/               # 分析流水线编排
+│   │   └── commit_rules.py         # ★ Commit 根因分析轻量引擎 (离线索引路径)
 │   ├── collector/                  # 离线 Commit 采集
-│   │   ├── git/                    # PyDriller 仓库遍历
+│   │   ├── git/                    # PyDriller 流式仓库遍历 (O(1) 内存)
 │   │   ├── parser/                 # Commit message/diff 解析
 │   │   ├── subsystem/              # 子系统识别 (28 个)
 │   │   ├── bugtype/                # Bug 类型识别 (21 种)
 │   │   ├── analysis/               # 锁/RCU/refcount 高级分析
-│   │   └── models/                 # CommitInfo 数据模型
+│   │   └── models/                 # CommitInfo / QueryResult 数据模型
 │   ├── indexer/                    # 向量化与索引
-│   │   ├── embedding/              # BGE-M3 编码器 (GPU 加速)
+│   │   ├── embedding/              # BGE-M3 编码器 (GPU 加速 + 多模型支持)
 │   │   ├── milvus/                 # Milvus + FAISS 双后端
-│   │   └── pipeline/               # ★ 对称 Root Cause Embedding
+│   │   └── pipeline/               # ★ 对称 Root Cause Embedding 流水线
 │   ├── retriever/                  # 在线检索核心
-│   │   ├── recall/                 # 向量召回 (Top-K)
+│   │   ├── recall/                 # 向量召回 (Milvus/FAISS Top-K)
 │   │   ├── filter/                 # 子系统/版本/类型规则过滤
 │   │   ├── rerank/                 # BGE-Reranker-v2 + LLM Judge
-│   │   └── pipeline/               # fast/standard/deep 三种模式
+│   │   └── pipeline/               # fast/standard/deep 三种检索模式
 │   ├── generator/                  # 报告生成
-│   │   ├── llm/                    # DeepSeek/Qwen/OpenAI 统一接口
-│   │   ├── prompt/                 # 场景化 Prompt 模板 + Few-shot
+│   │   ├── llm/                    # DeepSeek/Qwen/OpenAI 统一接口 + Ollama 本地
+│   │   ├── prompt/                 # 场景化 Prompt 模板 + Few-shot 示例
 │   │   └── report/                 # Markdown/JSON 报告格式化
 │   ├── knowledge/                  # 内核领域知识库
 │   │   ├── bug_patterns/           # 10 种 Bug 模式知识图谱
-│   │   ├── lock_rules/             # 6 锁类型 + 5 死锁模式
-│   │   └── subsystem_graph/        # 7 子系统交互关系
-│   ├── services/                   # 业务逻辑编排 (端到端诊断)
-│   ├── models/                     # 全局数据模型
-│   └── common/                     # 日志 / 异常 / 工具函数
+│   │   ├── lock_rules/             # 6 锁类型 + 5 死锁模式 + 8 条排序规则
+│   │   └── subsystem_graph/        # 12 子系统交互关系 (层级/耦合/调用)
+│   ├── services/                   # 业务逻辑编排 (端到端在线诊断)
+│   ├── models/                     # 全局数据模型 (枚举 + 配置 + API 模型)
+│   └── common/                     # 公共基础设施
+│       ├── exceptions/             # 层次化异常类体系 (6 大类 20+ 异常)
+│       ├── logging/                # loguru 统一日志 (结构化 + 性能计时)
+│       ├── utils/                  # 工具函数 (文本/哈希/数值/批处理/调试)
+│       ├── config.py               # 统一配置中心 (环境变量 + YAML)
+│       └── taxonomy.py             # Bug 类型标准分类体系 (跨模块标准化)
 ├── frontend/                       # Vue 3 前端
 │   └── src/
 │       ├── views/                  # Dashboard / CrashAnalysis / KnowledgeBase / History
@@ -257,6 +264,7 @@ core-linuxcommit/
 │       ├── api/                    # Axios API 客户端
 │       ├── stores/                 # Pinia 状态管理
 │       ├── router/                 # Vue Router 路由
+│       ├── styles/                 # 暗色专业主题样式
 │       └── utils/                  # 格式化 / 错误处理
 ├── scripts/                        # 运维脚本
 │   ├── start-dev.sh                # 一键启动 (后端 + 前端)
@@ -267,9 +275,14 @@ core-linuxcommit/
 │   ├── Dockerfile                  # Python 3.12-slim
 │   └── docker-compose.yml          # App + Milvus + Redis
 ├── tests/                          # 测试
-│   ├── conftest.py                  # Pytest fixtures
+│   ├── conftest.py                 # Pytest fixtures
 │   ├── fixtures/                   # 10 种宕机日志样本
-│   └── test_integration.py         # 集成测试
+│   ├── test_integration.py         # 端到端集成测试
+│   ├── test_analyzer.py            # 分析器单元测试
+│   ├── test_collector.py           # 采集器单元测试
+│   ├── test_commit_rules.py        # Commit 规则引擎测试
+│   ├── test_indexer.py             # 索引器单元测试
+│   └── test_retriever.py           # 检索器单元测试
 ├── .env.example                    # 环境变量模板
 ├── requirements.txt                # Python 依赖
 └── README.md                       # 本文档
@@ -293,7 +306,7 @@ core-linuxcommit/
 ```bash
 # 1. 克隆项目
 git clone <repo-url>
-cd core-linuxcommit
+cd project3136859-388917
 
 # 2. 创建虚拟环境
 python3 -m venv venv
@@ -576,4 +589,4 @@ MIT License
 
 ---
 
-*© 2026 Core.LinuxCommit Project Team*
+*© 2026 project3136859-388917 Project Team*

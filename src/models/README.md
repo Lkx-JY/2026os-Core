@@ -30,9 +30,12 @@
 ### IndexProgress (索引进度)
 
 进度追踪数据结构，支持:
-- `progress_pct` — 百分比进度
-- `eta_seconds` — 预估剩余时间
-- `vectors_per_second` — 索引进度速率
+- `total` / `indexed` / `failed` — 计数统计
+- `current_batch` / `total_batches` — 批次进度
+- `progress_pct` — 百分比进度 (计算属性)
+- `eta_seconds` — 预估剩余时间 (计算属性)
+- `vectors_per_second` — 索引速率
+- `elapsed_seconds` — 已用时间
 
 ---
 
@@ -113,6 +116,14 @@ class DiagnosisResponse:
     recommendations: List[Dict]   # 补丁推荐列表
     total_time_ms: float
     error_message: str
+
+@dataclass
+class BatchDiagnosisResponse:
+    total: int                    # 总请求数
+    completed: int                # 成功完成数
+    failed: int                   # 失败数
+    results: List[DiagnosisResponse]
+    total_time_ms: float
 ```
 
 ### Pydantic 模型 (可选)

@@ -29,18 +29,24 @@ collector/
 
 ### git 模块
 
-负责从 Git 仓库读取 commit 信息。
+负责从 Git 仓库读取 commit 信息，基于 PyDriller 实现流式遍历。
 
 **主要功能：**
-- 获取 commit 历史列表
-- 获取单个 commit 的详细信息
-- 按日期筛选 commit
-- 按作者筛选 commit
-- 检查路径是否为 Git 仓库
+- 流式遍历 commit 历史 (`traverse_commits` — O(1) 内存，生成器模式)
+- 批量获取 commit 信息 (`collect_commits_batch`)
+- 获取单个 commit 的详细信息 (`get_commit_info`)
+- 获取 commit 历史列表 (`get_commit_history`)
+- 按日期筛选 commit (`get_commits_since_date`)
+- 按作者筛选 commit (`get_commits_by_author`)
+- 检查路径是否为 Git 仓库 (`is_git_repo`)
 
 **核心函数：**
 ```python
-from src.collector.git import get_commit_info, get_commit_history
+from src.collector.git import traverse_commits, get_commit_info, get_commit_history
+
+# 流式遍历 — 推荐用于大规模处理 (百万级 commit 不 OOM)
+for commit in traverse_commits(repo_path="/path/to/repo", limit=10000):
+    process(commit)
 
 # 获取 commit 历史
 commits = get_commit_history(repo_path="/path/to/repo", limit=100)
@@ -58,10 +64,11 @@ commit = get_commit_info(commit_hash="abc123", repo_path="/path/to/repo")
 - 识别修复相关标签
 - 从 diff 中提取函数名
 - 判断是否为修复类 commit
+- 解析 commit subject 前缀（子系统标记）
 
 **核心函数：**
 ```python
-from src.collector.parser import extract_keywords, extract_fix_tags, parse_commit_message
+from src.collector.parser import extract_keywords, extract_fix_tags, parse_commit_message, parse_subject
 
 # 提取关键字
 keywords = extract_keywords(commit)
@@ -71,6 +78,9 @@ fix_tags = extract_fix_tags(commit)
 
 # 完整解析 commit 消息
 commit = parse_commit_message(commit)
+
+# 解析 subject 前缀 (如 "mm: fix NULL pointer")
+subsystem_from_subject = parse_subject(commit.subject)
 ```
 
 ### subsystem 模块
@@ -172,11 +182,22 @@ if commit:
 ```python
 from src.collector import collect_commits
 
-# 收集最近 100 个 commit
+# 收集最近 100 个 commit (批量模式 — 一次遍历)
 commits = collect_commits(repo_path="/path/to/git/repo", limit=100)
 
 for commit in commits:
     print(f"{commit.commit_hash}: {commit.subject}")
+```
+
+### 流式收集 (★ 推荐 — 适用于百万级 Commit)
+
+```python
+from src.collector import collect_commits_stream
+
+# 生成器模式 — 逐条产出，永不 OOM
+for commit in collect_commits_stream(repo_path="/path/to/git/repo", limit=10000):
+    print(f"{commit.commit_hash}: {commit.subject}")
+    # 可在此逐条写入向量库
 ```
 
 ### 按日期收集
@@ -255,6 +276,8 @@ text = commit.to_embedding_text()
 ```python
 from src.collector import (
     # Git 操作
+    traverse_commits,
+    collect_commits_batch,
     get_commit_history,
     get_commit_info,
     get_commits_since_date,
@@ -266,6 +289,7 @@ from src.collector import (
     extract_fix_tags,
     extract_functions,
     parse_commit_message,
+    parse_subject,
     is_fix_commit,
     
     # 子系统识别
@@ -289,6 +313,7 @@ from src.collector import (
     # 综合功能
     collect_commit,
     collect_commits,
+    collect_commits_stream,
     collect_commits_since_date,
     collect_commits_by_author,
 )

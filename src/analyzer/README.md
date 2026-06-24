@@ -21,13 +21,16 @@
 
 ```
 src/analyzer/
-├── __init__.py          # 模块入口 — 统一导出所有公共 API
-├── models/__init__.py   # 数据模型 — CrashFeature & RootCauseResult
-├── dmesg/__init__.py    # dmesg 日志解析 — 正则提取 Call Trace / Panic 消息
-├── vmcore/__init__.py   # vmcore 解析 — 基于 drgn 的内核对象提取
-├── drgn/__init__.py     # drgn 集成 (待实现)
-├── rootcause/__init__.py # 根因抽象核心 — 20+ 专家规则 + 调用栈分析 + 修复模式推断
-└── pipeline/__init__.py  # 流水线编排 — 串联特征提取 → 根因抽象
+├── __init__.py              # 模块入口 — 统一导出所有公共 API
+├── models/__init__.py       # 数据模型 — CrashFeature & RootCauseResult
+├── dmesg/__init__.py        # dmesg 日志解析 — 正则提取 Call Trace / Panic 消息 + LLM 深度分析
+├── vmcore/__init__.py       # vmcore 解析 — 基于 drgn 的内核对象提取 + 调用栈重建
+├── drgn/__init__.py         # drgn 调试器集成
+├── rootcause/               # 根因抽象核心
+│   ├── __init__.py          #   28 条专家规则 + 调用栈分析 + 修复模式推断
+│   └── llm_rootcause.py     #   LLM 协同根因推理 + Hybrid 混合分析
+├── pipeline/__init__.py     # 分析流水线编排 — 串联特征提取 → 根因抽象
+└── commit_rules.py          # ★ Commit 根因分析轻量引擎 (离线索引路径, 3-5ms/commit)
 ```
 
 ### 数据流
@@ -43,10 +46,11 @@ src/analyzer/
          │  CrashFeature
          ▼
 ┌─────────────────┐
-│  Phase 2: 根因抽象 │  Layer 1: 28 条专家规则精确匹配
-│  (rootcause)      │  Layer 2: 调用栈结构分析
-│                   │  Layer 3: Bug 类型通用抽象
-│                   │  Layer 4: Panic 关键词兜底
+│  Phase 2: 根因抽象 │  Layer 1: 28 条专家规则精确匹配 (0.60~0.95)
+│  (rootcause)      │  Layer 2: 调用栈结构分析 (4 类 × 89 个函数)
+│                   │  Layer 3: Bug 类型通用抽象 (0.40~0.55)
+│                   │  Layer 4: Panic 关键词兜底 (0.40~0.50)
+│                   │  + LLM 协同推理 (llm_rootcause, 可选)
 └────────┬────────┘
          │  RootCauseResult (含 retrieval_query)
          ▼
@@ -78,6 +82,10 @@ src/analyzer/
 
 **职责**: 将 `CrashFeature` 转化为 `RootCauseResult`，包含根因诊断、因果链和检索查询。
 
+**子模块**:
+- `rootcause/__init__.py` — 28 条专家规则 + 调用栈分析 + 修复模式推断 + 检索查询构造
+- `rootcause/llm_rootcause.py` — LLM 协同根因推理 (`llm_root_cause_analysis`) + Hybrid 混合分析 (`hybrid_root_cause_analysis`)
+
 **四层分层分析策略**:
 
 | 层级 | 方法 | 置信度 | 说明 |
@@ -101,6 +109,42 @@ src/analyzer/
 1. `vmcore + dmesg` (最优)
 2. `vmcore only`
 3. `dmesg only`
+
+### 2.5 commit_rules — Commit 根因分析轻量引擎 (★ 离线索引)
+
+**职责**: 用于离线 Commit 索引路径，直接利用 Collector 已提取的结构化特征，通过三层轻量分析完成根因推断。
+
+**与 RootCauseAnalyzer 的区别**:
+- RootCauseAnalyzer: 在线 Crash 路径，4 层重分析 (~100ms/次)
+- CommitRootCauseBuilder: 离线索引路径，3 层轻量分析 (3-5ms/次)
+
+**三层分析策略**:
+
+| 层级 | 方法 | 说明 |
+|------|------|------|
+| Layer 1 | BUG_TEMPLATE 查表 | 25 种 bug_type → 根因描述 (<0.01ms) |
+| Layer 2 | DIFF_RULES 规则 | 25 条规则分析 diff 的 +/- 行 (1-3ms) |
+| Layer 3 | 置信度评估 + 兜底 | 多维度评分 (<1ms) |
+
+**核心 API**:
+```python
+from src.analyzer import (
+    RootCauseSummary,
+    CommitRootCauseBuilder,
+    get_builder,
+    build_commit_embedding_text,
+    build_commit_embedding_text_simple,
+)
+
+# 获取全局 builder 单例
+builder = get_builder()
+
+# 为单个 commit 构建根因摘要
+summary: RootCauseSummary = builder.build(commit_info)
+
+# 生成对称 embedding 文本 (供 BGE-M3 编码)
+embedding_text = build_commit_embedding_text(commit_info)
+```
 
 ---
 
@@ -142,6 +186,8 @@ class RootCauseResult:
 
 ## 4. 根因分析流水线
 
+### 在线 Crash 路径 (RootCauseAnalyzer)
+
 ```
 用户输入 (dmesg / vmcore)
        │
@@ -169,6 +215,34 @@ class RootCauseResult:
            │ RootCauseResult
            ▼
     下游: Retriever / Generator
+```
+
+### 离线 Commit 路径 (CommitRootCauseBuilder)
+
+```
+CommitInfo (Collector 提取的结构化特征)
+       │
+       ▼
+┌──────────────────────┐
+│ Layer 1: BUG_TEMPLATE │  25 种 bug_type → 根因描述查表 (<0.01ms)
+│ 查表                  │  bug_type / subsystem / severity
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ Layer 2: DIFF_RULES   │  25 条规则分析 diff 的 +/- 行 (1-3ms)
+│ 规则匹配              │  lock_added / refcount_fix / rcu_fix 事实证据
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ Layer 3: 置信度评估   │  多维度评分: 模板匹配 + diff 证据 + 关键词 (<1ms)
+│ + 兜底                │  → RootCauseSummary
+└──────────┬───────────┘
+           │
+           ▼
+  build_commit_embedding_text()
+  → BGE-M3 编码 → Milvus/FAISS
 ```
 
 ---

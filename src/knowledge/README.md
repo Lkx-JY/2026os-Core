@@ -34,7 +34,7 @@ src/knowledge/
 
 **职责**: 定义 Linux 内核常见 Bug 类型的结构化知识。
 
-**覆盖的 Bug 模式 (9 种)**:
+**覆盖的 Bug 模式 (10 种)**:
 
 | Bug 类型 | 严重程度 | 类别 |
 |----------|---------|------|
@@ -60,13 +60,28 @@ src/knowledge/
 
 **核心 API**:
 ```python
-from src.knowledge import get_bug_pattern, search_bug_by_symptom
+from src.knowledge import (
+    BUG_PATTERNS, get_bug_pattern, get_fix_patterns,
+    get_search_keywords, get_detection_tools,
+    list_bug_patterns, search_bug_by_symptom,
+    generate_bug_context_for_llm,
+)
 
 # 获取模式定义
 pattern = get_bug_pattern("use_after_free")
 
 # 根据症状自动匹配 Bug 类型
 matches = search_bug_by_symptom("KASAN: use-after-free in kfree_skb")
+
+# 获取修复模式
+fix_patterns = get_fix_patterns("use_after_free")
+
+# 获取检测工具推荐
+tools = get_detection_tools("deadlock")  # → ["LOCKDEP", "lockdep"]
+
+# 列出所有模式
+for name in list_bug_patterns():
+    print(name, get_bug_pattern(name)["severity"])
 ```
 
 ### 2.2 lock_rules — 锁规则知识库
@@ -90,7 +105,13 @@ matches = search_bug_by_symptom("KASAN: use-after-free in kfree_skb")
 
 **核心 API**:
 ```python
-from src.knowledge import analyze_lock_usage, match_deadlock_pattern
+from src.knowledge import (
+    LOCK_TYPES, LOCK_ORDERING_RULES, DEADLOCK_PATTERNS, LOCK_FIX_PATTERNS,
+    get_lock_type, detect_lock_type_from_function,
+    get_lock_ordering_rules, get_lock_fix_pattern,
+    analyze_lock_usage, match_deadlock_pattern,
+    generate_lock_context_for_llm,
+)
 
 # 分析调用栈中的锁使用
 analysis = analyze_lock_usage(call_trace)
@@ -98,6 +119,13 @@ print(analysis["potential_issues"])
 
 # 匹配 lockdep 报告
 patterns = match_deadlock_pattern(lockdep_msg)
+
+# 根据函数名检测锁类型
+lock_type = detect_lock_type_from_function("mutex_lock_interruptible")
+# → {"type": "mutex", "can_sleep": True, "description": "..."}
+
+# 获取锁排序规则
+rules = get_lock_ordering_rules("mm")
 ```
 
 ### 2.3 subsystem_graph — 子系统关系图
@@ -114,11 +142,28 @@ mm, fs, net, block, kernel, drivers, arch, bpf, security, kvm, rcu, cgroup
 
 **核心 API**:
 ```python
-from src.knowledge import get_related_subsystems
+from src.knowledge import (
+    SUBSYSTEMS, SUBSYSTEM_HIERARCHY, COUPLED_SUBSYSTEMS, CALL_RELATIONS,
+    get_subsystem_info, get_children, get_parent, get_ancestors,
+    get_related_subsystems, detect_subsystem_by_path,
+    detect_subsystem_by_function, list_subsystems_by_bug_type,
+    generate_subsystem_context_for_llm,
+)
 
 # 获取检索时应扩展的子系统
 related = get_related_subsystems("mm")
-# → ["arch", "block", "fs", "kernel", "mm", "page_alloc", "slab", ...]
+# → ["arch", "block", "fs", "kernel", "mm", "slab", ...]
+
+# 获取子系统层级
+children = get_children("kernel")  # → ["rcu", "cgroup", "bpf", "irq"]
+parent = get_parent("bpf")         # → "kernel"
+
+# 根据文件路径检测子系统
+subsys = detect_subsystem_by_path("drivers/net/ethernet/intel/e1000.c")
+# → "net"
+
+# 根据 Bug 类型列出相关子系统
+subsystems = list_subsystems_by_bug_type("use_after_free")
 ```
 
 ---

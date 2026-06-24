@@ -112,11 +112,12 @@ src/indexer/
 | 增量索引 | `index_commits_incremental()` | 增量添加新 commit |
 | 在线查询向量 | `get_query_vector()` | 分析结果 → 查询向量 (优先使用 retrieval_query) |
 | 一站式检索 | `search_similar_commits()` | 分析结果 → Top-K 候选 commit |
-| ★ Embedding 文本构造 | `prepare_commit_embedding_text()` | ★ 通过 RootCauseAnalyzer (28规则+4层分析) 生成与在线侧对称的 embedding 文本 |
+| ★ Embedding 文本构造 | `prepare_commit_embedding_text()` | ★ 生成与在线侧对称的 embedding 文本 (默认使用 CommitRootCauseBuilder 轻量引擎, 3-5ms/commit) |
 | 检索查询构造 | `prepare_rootcause_embedding_text()` | RootCauseResult → 查询文本 |
-| ★ 对称分析辅助 | `_commit_to_crash_feature()` | CommitInfo → CrashFeature 映射 |
-| | `_enhance_fix_hints_with_diff()` | 将 diff 分析结果融合进 fix_hints |
-| | `_build_commit_root_cause_embedding_text()` | 完整的对称 embedding 文本构造流程 |
+| ★ 对称分析 (新版) | `_build_commit_root_cause_embedding_text()` | 通过 CommitRootCauseBuilder (3层轻量分析: BUG_TEMPLATE + DIFF_RULES + 置信度) |
+| ★ 对称分析 (旧版) | `_build_commit_root_cause_embedding_text_legacy()` | 通过 RootCauseAnalyzer (4层重分析，保留用于 A/B 对比) |
+| 特征映射辅助 | `_commit_to_crash_feature()` | CommitInfo → CrashFeature 映射 |
+| | `_enhance_fix_hints_with_diff()` | 将 Collector diff 分析结果融合进 fix_hints |
 
 ---
 
@@ -134,12 +135,13 @@ Linux Kernel Git Repo
          │ List[CommitInfo]
          ▼
 ┌─────────────────┐
-│ prepare_commit   │  ★ Root Cause 对称分析:
-│ _embedding_text  │  1. CommitInfo → CrashFeature
-│ (use_root_cause  │  2. RootCauseAnalyzer (28规则+4层分析)
-│  =True, 默认)     │  3. 增强 fix_hints (融入 diff 证据)
-│                  │  4. build_retrieval_query (6层语义融合)
-│                  │  5. 追加 KeyDiffLines
+│ prepare_commit   │  ★ Root Cause 对称分析 (默认: CommitRootCauseBuilder):
+│ _embedding_text  │  1. CommitInfo → BUG_TEMPLATE 查表 (25 种, <0.01ms)
+│ (use_root_cause  │  2. DIFF_RULES 规则匹配 (25 条, 1-3ms)
+│  =True, 默认)     │  3. 置信度评估 + 兜底 (<1ms)
+│                  │  4. 融合 diff 证据 (lock/refcount/RCU)
+│                  │  5. 追加 KeyDiffLines → BGE-M3 编码
+│                  │  ★ 旧版路径 (RootCauseAnalyzer, ~100ms) 保留用于 A/B 对比
 └────────┬────────┘
          │ 优化后的文本
          ▼

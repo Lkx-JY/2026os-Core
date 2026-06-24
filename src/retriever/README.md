@@ -152,7 +152,7 @@ RootCauseResult.retrieval_query
 - `apply_filters()`: ★ 流水线 — 应用所有过滤器
 - `build_milvus_filter_expr()`: 构造 Milvus 标量过滤表达式
 
-**28 个支持的子系统**: mm, fs, net, block, kernel, drivers, arch, bpf, security, kvm, rcu, cgroup, nfs, usb, pci, nvme, scsi, crypto, power
+**19 个支持的子系统**: mm, fs, net, block, kernel, drivers, arch, bpf, security, kvm, rcu, cgroup, nfs, usb, pci, nvme, scsi, crypto, power
 
 ### 3.3 rerank — 语义重排
 

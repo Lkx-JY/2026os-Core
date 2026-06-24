@@ -46,9 +46,11 @@ src/generator/
 | **使用统计** | Token 计数和调用次数追踪 |
 
 **支持的模型**:
-- DeepSeek (deepseek-chat)
-- Qwen (qwen-plus / qwen-max)
-- OpenAI 兼容 API
+- DeepSeek (deepseek-chat) — 用户自备 API Key
+- Qwen (qwen-plus / qwen-max) — 用户自备 API Key
+- OpenAI 兼容 API — 用户自备 API Key
+- Ollama 本地模型 (qwen2.5:7b / llama3 等) — ★ 免费，无需 API Key
+- 自动降级: API 不可用或用户未提供 Key → 自动切换到 Ollama 本地模型
 
 ### 2.2 prompt — Prompt 工程
 
