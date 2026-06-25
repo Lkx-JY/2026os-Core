@@ -135,7 +135,7 @@ Call Trace:
         <el-progress
           :percentage="Math.round((currentTask.progress || 0) * 100)"
           :stroke-width="6"
-          :color="'#00d4ff'"
+          :color="'#1976D2'"
         />
         <div class="mt-4">
           <el-steps :active="activeStepIndex" align-center>
@@ -375,10 +375,10 @@ const rootCauseTagType = computed(() => {
 
 const confidenceColor = computed(() => {
   const conf = currentTask.value?.result?.root_cause?.confidence
-  if (conf == null) return '#9090a0'
-  if (conf >= 0.8) return '#00c853'
+  if (conf == null) return '#78909c'
+  if (conf >= 0.8) return '#4caf50'
   if (conf >= 0.6) return '#ff9800'
-  return '#ff3d3d'
+  return '#f44336'
 })
 
 const renderedExplanation = computed(() => {
@@ -472,8 +472,8 @@ function copyText(text) {
 }
 
 function rankColor(rank) {
-  const colors = ['#00d4ff', '#00c853', '#ff9800', '#9c27b0', '#ff6d00']
-  return colors[rank - 1] || '#9090a0'
+  const colors = ['#1976D2', '#4caf50', '#ff9800', '#7c4dff', '#ff6d00']
+  return colors[rank - 1] || '#78909c'
 }
 
 // ── 从 URL 恢复任务 ────────────────────────────
@@ -505,7 +505,7 @@ watch(() => route.query.task, (taskId) => {
   font-size: 22px;
   font-weight: 700;
   margin-bottom: 4px;
-  color: #fff;
+  color: var(--color-text);
 }
 
 .input-card { margin-bottom: 24px; }
@@ -526,8 +526,8 @@ watch(() => route.query.task, (taskId) => {
 
 /* ── LLM 配置卡片 ────────────────────────────── */
 .llm-config-card {
-  background: rgba(0, 212, 255, 0.03) !important;
-  border: 1px solid rgba(0, 212, 255, 0.12) !important;
+  background: rgba(25, 118, 210, 0.04) !important;
+  border: 1px solid rgba(25, 118, 210, 0.12) !important;
 }
 .llm-config-card :deep(.el-radio) {
   display: flex;
@@ -584,7 +584,7 @@ watch(() => route.query.task, (taskId) => {
 .patch-title {
   font-size: 16px;
   font-weight: 600;
-  color: #fff;
+  color: var(--color-text);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -601,7 +601,7 @@ watch(() => route.query.task, (taskId) => {
 .patch-scores { margin-top: 8px; }
 
 .diff-preview {
-  background: #0d0d1a;
+  background: #f0f4f8;
   font-size: 12px;
   max-height: 200px;
   overflow-y: auto;
@@ -619,11 +619,12 @@ watch(() => route.query.task, (taskId) => {
   font-size: 14px;
   margin-top: 12px;
 }
-.llm-explanation :deep(strong) { color: #fff; }
+.llm-explanation :deep(strong) { color: var(--color-text); }
 .llm-explanation :deep(code) {
-  background: #1a1a30;
+  background: #f0f4f8;
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 12px;
+  color: #e53935;
 }
 </style>

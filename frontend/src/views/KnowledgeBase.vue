@@ -265,7 +265,7 @@ onMounted(() => {
   font-size: 22px;
   font-weight: 700;
   margin-bottom: 4px;
-  color: #fff;
+  color: var(--color-text);
 }
 
 .search-card { margin-bottom: 0; }
@@ -300,14 +300,14 @@ onMounted(() => {
   cursor: pointer;
   transition: background 0.15s;
 }
-.commit-item:hover { background: rgba(0, 212, 255, 0.03); }
+.commit-item:hover { background: rgba(25, 118, 210, 0.06); }
 .commit-item:last-child { border-bottom: none; }
 
 .commit-main { flex: 1; }
 .commit-title {
   font-size: 15px;
   font-weight: 600;
-  color: #fff;
+  color: var(--color-text);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -330,7 +330,7 @@ onMounted(() => {
 }
 
 .diff-preview {
-  background: #0d0d1a;
+  background: #f0f4f8;
   font-size: 12px;
   max-height: 300px;
   overflow-y: auto;

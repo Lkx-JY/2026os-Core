@@ -4,18 +4,28 @@
 
 /* ── CSS 变量 ─────────────────────────────────── */
 :root {
-  --color-primary: #00d4ff;
-  --color-primary-dark: #00a8cc;
-  --color-bg-dark: #0a0a1a;
-  --color-bg-card: #141428;
-  --color-bg-sidebar: #0d0d24;
-  --color-text: #e0e0e0;
-  --color-text-muted: #9090a0;
-  --color-border: #2a2a40;
-  --color-success: #00c853;
+  --color-primary: #1976D2;
+  --color-primary-dark: #1565C0;
+  --color-primary-light: #42A5F5;
+  --color-bg-dark: #d6eaf8;
+  --color-bg-card: #ffffff;
+  --color-bg-sidebar: #dbefff;
+  --color-text: #212121;
+  --color-text-muted: #78909c;
+  --color-border: #aecff0;
+  --color-success: #4caf50;
   --color-warning: #ff9800;
-  --color-danger: #ff3d3d;
+  --color-danger: #f44336;
   --sidebar-width: 240px;
+
+  /* Element Plus 主按钮色 */
+  --el-color-primary: #1976D2;
+  --el-color-primary-light-3: #42A5F5;
+  --el-color-primary-light-5: #64B5F6;
+  --el-color-primary-light-7: #90CAF9;
+  --el-color-primary-light-8: #BBDEFB;
+  --el-color-primary-light-9: #E3F2FD;
+  --el-color-primary-dark-2: #1565C0;
 }
 
 /* ── 基础重置 ─────────────────────────────────── */
@@ -28,7 +38,7 @@
 html, body {
   height: 100%;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  font-size: 14px;
+  font-size: 16px;
   color: var(--color-text);
   background-color: var(--color-bg-dark);
   -webkit-font-smoothing: antialiased;
@@ -48,11 +58,11 @@ html, body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #3a3a50;
+  background: #b0bec5;
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #505070;
+  background: #90a4ae;
 }
 
 /* ── 代码块 ───────────────────────────────────── */
@@ -61,12 +71,13 @@ code, pre {
 }
 
 pre {
-  background: #1a1a2e;
+  background: #f5f7fa;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 16px;
   overflow-x: auto;
   line-height: 1.6;
+  color: var(--color-text);
 }
 
 code {
@@ -82,7 +93,7 @@ code {
 
 .el-input__inner,
 .el-textarea__inner {
-  background-color: #1a1a30 !important;
+  background-color: #fafafa !important;
   border-color: var(--color-border) !important;
   color: var(--color-text) !important;
 }
@@ -91,8 +102,12 @@ code {
   background-color: transparent !important;
 }
 .el-table th.el-table__cell {
-  background-color: #1a1a2e !important;
+  background-color: #ffffff !important;
   color: var(--color-text-muted) !important;
+  font-size: 16px;
+}
+.el-table td.el-table__cell {
+  font-size: 16px;
 }
 .el-table tr {
   background-color: transparent !important;

@@ -15,8 +15,8 @@
         :router="true"
         class="sidebar-menu"
         background-color="transparent"
-        text-color="#a0a0c0"
-        active-text-color="#00d4ff"
+        text-color="#546e7a"
+        active-text-color="#1976D2"
       >
         <el-menu-item index="/">
           <el-icon><Odometer /></el-icon>
@@ -280,7 +280,7 @@ onBeforeUnmount(() => {
   border-radius: 8px;
 }
 .sidebar-menu .el-menu-item.is-active {
-  background-color: rgba(0, 212, 255, 0.1) !important;
+  background-color: rgba(25, 118, 210, 0.12) !important;
 }
 
 .sidebar-footer {
@@ -305,9 +305,9 @@ onBeforeUnmount(() => {
 .sidebar-tips {
   padding: 12px 16px;
   margin: 0 8px;
-  background: rgba(0, 212, 255, 0.05);
+  background: rgba(25, 118, 210, 0.06);
   border-radius: 8px;
-  border: 1px solid rgba(0, 212, 255, 0.1);
+  border: 1px solid rgba(25, 118, 210, 0.12);
 }
 .tips-header {
   display: flex;
@@ -315,7 +315,7 @@ onBeforeUnmount(() => {
   gap: 6px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--color-primary);
+  color: var(--color-primary-dark);
   margin-bottom: 8px;
 }
 .tips-list {
@@ -403,6 +403,7 @@ onBeforeUnmount(() => {
   flex: 1;
   overflow-y: auto;
   padding: 24px;
+  background: #ffffff;
 }
 
 /* ── 路由过渡动画 ────────────────────────────── */

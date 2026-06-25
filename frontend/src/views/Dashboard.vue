@@ -148,14 +148,14 @@ const statCards = computed(() => [
     label: '已索引 Commit',
     value: statsStore.stats?.total_commits?.toLocaleString() || '—',
     icon: 'Document',
-    color: '#00d4ff',
+    color: '#1976D2',
     loading: statsStore.loading,
   },
   {
     label: '子系统覆盖',
     value: statsStore.stats?.subsystems?.length || '—',
     icon: 'Grid',
-    color: '#00c853',
+    color: '#4caf50',
     loading: statsStore.loading,
   },
   {
@@ -169,7 +169,7 @@ const statCards = computed(() => [
     label: '已完成分析',
     value: statsStore.stats?.total_analyses?.toLocaleString() || '—',
     icon: 'Checked',
-    color: '#9c27b0',
+    color: '#7c4dff',
     loading: statsStore.loading,
   },
 ])
@@ -177,13 +177,13 @@ const statCards = computed(() => [
 // ── 子系统饼图 ─────────────────────────────────
 const subsystemChartOption = computed(() => ({
   tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
-  legend: { orient: 'vertical', right: 10, top: 'center', textStyle: { color: '#a0a0c0' } },
+  legend: { orient: 'vertical', right: 10, top: 'center', textStyle: { color: '#78909c' } },
   series: [{
     type: 'pie',
     radius: ['45%', '75%'],
     center: ['40%', '50%'],
     avoidLabelOverlap: false,
-    itemStyle: { borderRadius: 6, borderColor: '#0a0a1a', borderWidth: 2 },
+    itemStyle: { borderRadius: 6, borderColor: '#ffffff', borderWidth: 2 },
     label: { show: false },
     emphasis: {
       label: { show: true, fontSize: 14, fontWeight: 'bold' },
@@ -201,20 +201,20 @@ const bugTypeChartOption = computed(() => ({
   grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
   xAxis: {
     type: 'value',
-    axisLabel: { color: '#9090a0' },
-    splitLine: { lineStyle: { color: '#2a2a40' } },
+    axisLabel: { color: '#78909c' },
+    splitLine: { lineStyle: { color: '#e0e0e0' } },
   },
   yAxis: {
     type: 'category',
     data: (statsStore.stats?.bug_types || []).map(b => b.name),
-    axisLabel: { color: '#9090a0' },
+    axisLabel: { color: '#78909c' },
   },
   series: [{
     type: 'bar',
     data: (statsStore.stats?.bug_types || []).map((b, i) => ({
       value: b.count,
       itemStyle: {
-        color: ['#00d4ff', '#ff9800', '#00c853', '#ff3d3d', '#9c27b0', '#ff6d00'][i] || '#00d4ff',
+        color: ['#1976D2', '#ff9800', '#4caf50', '#f44336', '#7c4dff', '#ff6d00'][i] || '#1976D2',
         borderRadius: [0, 4, 4, 0],
       },
     })),
@@ -238,7 +238,7 @@ onMounted(() => {
   font-size: 22px;
   font-weight: 700;
   margin-bottom: 4px;
-  color: #fff;
+  color: var(--color-text);
 }
 
 .stats-row { margin-bottom: 8px; }
@@ -261,7 +261,7 @@ onMounted(() => {
 .stat-value {
   font-size: 22px;
   font-weight: 700;
-  color: #fff;
+  color: var(--color-text);
 }
 .stat-label {
   font-size: 13px;

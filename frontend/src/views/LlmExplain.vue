@@ -469,7 +469,7 @@ function goToPatchDetail(commitId) {
 }
 
 .result-section {
-  background: rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.04);
   border-radius: 8px;
   padding: 16px;
 }
@@ -500,10 +500,10 @@ function goToPatchDetail(commitId) {
   font-size: 12px;
   font-weight: 500;
 }
-.summary-badge.warning { background: rgba(255, 152, 0, 0.2); color: #ff9800; }
-.summary-badge.danger { background: rgba(255, 61, 61, 0.2); color: #ff3d3d; }
-.summary-badge.info { background: rgba(0, 212, 255, 0.2); color: #00d4ff; }
-.summary-badge.success { background: rgba(0, 200, 83, 0.2); color: #00c853; }
+.summary-badge.warning { background: rgba(255, 152, 0, 0.15); color: #e65100; }
+.summary-badge.danger { background: rgba(244, 67, 54, 0.15); color: #c62828; }
+.summary-badge.info { background: rgba(25, 118, 210, 0.15); color: #1976D2; }
+.summary-badge.success { background: rgba(76, 175, 80, 0.15); color: #2e7d32; }
 .summary-text {
   font-size: 13px;
   color: var(--color-text);
@@ -531,13 +531,14 @@ function goToPatchDetail(commitId) {
   margin: 6px 0;
 }
 .analysis-content code {
-  background: rgba(0, 0, 0, 0.3);
+  background: rgba(0, 0, 0, 0.06);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 12px;
+  color: #e53935;
 }
 .analysis-content pre {
-  background: rgba(0, 0, 0, 0.3) !important;
+  background: #f5f7fa !important;
   border-color: var(--color-border) !important;
   margin: 12px 0;
 }
@@ -565,7 +566,7 @@ function goToPatchDetail(commitId) {
   width: 24px;
   height: 24px;
   background: var(--color-primary);
-  color: #000;
+  color: #fff;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -587,14 +588,14 @@ function goToPatchDetail(commitId) {
   gap: 12px;
 }
 .patch-item {
-  background: rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.04);
   border-radius: 8px;
   padding: 14px;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 .patch-item:hover {
-  background: rgba(0, 212, 255, 0.1);
+  background: rgba(25, 118, 210, 0.08);
   border-left: 3px solid var(--color-primary);
 }
 .patch-header {
@@ -609,9 +610,9 @@ function goToPatchDetail(commitId) {
   font-size: 11px;
   font-weight: 600;
 }
-.patch-score.high { background: rgba(0, 200, 83, 0.2); color: #00c853; }
-.patch-score.medium { background: rgba(255, 152, 0, 0.2); color: #ff9800; }
-.patch-score.low { background: rgba(255, 61, 61, 0.2); color: #ff3d3d; }
+.patch-score.high { background: rgba(76, 175, 80, 0.15); color: #2e7d32; }
+.patch-score.medium { background: rgba(255, 152, 0, 0.15); color: #e65100; }
+.patch-score.low { background: rgba(244, 67, 54, 0.15); color: #c62828; }
 .patch-hash {
   font-family: monospace;
   font-size: 12px;

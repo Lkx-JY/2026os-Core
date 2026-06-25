@@ -227,7 +227,7 @@ function confirmClear() {
   font-size: 22px;
   font-weight: 700;
   margin-bottom: 4px;
-  color: #fff;
+  color: var(--color-text);
 }
 
 .mini-stat { text-align: center; }
