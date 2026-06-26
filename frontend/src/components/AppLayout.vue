@@ -26,10 +26,6 @@
           <el-icon><Search /></el-icon>
           <span>宕机日志分析</span>
         </el-menu-item>
-        <el-menu-item index="/llm-explain">
-          <el-icon><MessageSquare /></el-icon>
-          <span>LLM分析解释</span>
-        </el-menu-item>
         <el-menu-item index="/knowledge">
           <el-icon><Collection /></el-icon>
           <span>补丁知识库</span>
@@ -169,7 +165,6 @@ const apiKeyConfigured = ref(false)
 const activeMenu = computed(() => {
   const path = route.path
   if (path.startsWith('/analyze')) return '/analyze'
-  if (path.startsWith('/llm-explain')) return '/llm-explain'
   if (path.startsWith('/knowledge')) return '/knowledge'
   if (path.startsWith('/history')) return '/history'
   return '/'

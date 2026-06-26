@@ -29,6 +29,7 @@ from .filter import (
     filter_duplicates,
     filter_by_keywords,
     boost_security_fixes,
+    weight_by_kernel_version,
     apply_filters,
     build_milvus_filter_expr,
 )
@@ -64,6 +65,7 @@ __all__ = [
     "filter_duplicates",
     "filter_by_keywords",
     "boost_security_fixes",
+    "weight_by_kernel_version",
     "apply_filters",
     "build_milvus_filter_expr",
     # Rerank

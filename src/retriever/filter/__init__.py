@@ -229,9 +229,14 @@ def filter_by_kernel_version(
     - rejected: 版本信息可确认但不匹配
     - uncertain: 无法从提交中提取版本信息（非严格模式保留，严格模式拒绝）
 
+    版本匹配优先级:
+    1. 候选的显式 kernel_version_major/minor 元数据 (最可靠)
+    2. 候选 subject/body 中的版本号正则提取
+    3. 基于 commit 日期的版本推断 (降级策略)
+
     Args:
         candidates: 候选列表
-        kernel_version: 目标内核版本
+        kernel_version: 目标内核版本 (支持 "6.1.0" 或 "6.1.0-15-amd64" 等格式)
         version_tolerance: 版本容忍度 (允许 ±N 个 minor 版本)
         strict: 无法判断时直接拒绝而非放入 uncertain
 
@@ -241,8 +246,14 @@ def filter_by_kernel_version(
     if not kernel_version:
         return FilterResult(passed=candidates, filter_name="kernel_version_filter(no_target)")
 
-    try:
+    # 归一化输入版本号
+    from ...collector.versioning import normalize_kernel_version
+    normalized = normalize_kernel_version(kernel_version)
+    if normalized:
+        parts = normalized.split(".")
+    else:
         parts = kernel_version.split(".")
+    try:
         target_major = int(parts[0])
         target_minor = int(parts[1]) if len(parts) > 1 else 0
     except (ValueError, IndexError):
@@ -252,6 +263,22 @@ def filter_by_kernel_version(
     rejected = []
     uncertain = []
     for cand in candidates:
+        # 策略0: 优先使用显式版本元数据 (最可靠，离线索引时已预计算)
+        # 宽松匹配：同主版本内不过滤，由 weight_by_kernel_version 做软加权
+        cand_major = cand.get("kernel_version_major")
+        cand_minor = cand.get("kernel_version_minor")
+        if cand_major is not None and cand_minor is not None:
+            if cand_major == target_major:
+                # 同主版本 — 全部保留，让软加权去调分
+                passed.append(cand)
+            elif cand_major > target_major:
+                # 跨主版本更新 — 可能不兼容，放入 uncertain
+                uncertain.append(cand)
+            else:
+                # 旧主版本 — 可能是 backport 来源，保留
+                passed.append(cand)
+            continue
+
         cand_subject = cand.get("subject", "")
 
         # 策略1: 从 subject 和 body 中提取版本信息 (如 "6.1", "v5.15")
@@ -348,6 +375,92 @@ def _version_from_date_compatible(
             return True  # 旧主版本的补丁通常兼容
     except Exception:
         return None
+
+
+# ============================================================================
+# 版本软加权 — 非破坏性分数调整
+# ============================================================================
+
+def weight_by_kernel_version(
+    candidates: List[Dict[str, Any]],
+    target_version: str,
+) -> List[Dict[str, Any]]:
+    """根据 commit 版本与目标版本的"距离"对候选进行软加权。
+
+    与 filter_by_kernel_version (硬过滤) 不同，此函数不做剔除，
+    而是调整 _boosted_score 来影响最终排序。
+
+    加权策略:
+        精确同版本 → ×1.30 (可能是直接修复)
+        同主版本, minor 差 1~2 → ×1.15 (Fixes backport 候选)
+        同主版本, minor 差 3~5 → ×1.00 (中性)
+        同主版本, minor 差 ≥6 → ×0.70 (弱信号)
+        跨主版本更新 → ×0.80 (可能不兼容)
+        旧版本 → ×1.00 (中性, backport 来源)
+        版本未知 → ×0.90 (略微降权)
+
+    Args:
+        candidates: 候选列表，每条需包含 kernel_version_major / kernel_version_minor
+        target_version: 归一化目标版本 "major.minor.0"
+
+    Returns:
+        调整后的候选列表 (原地修改 _boosted_score)
+    """
+    if not target_version or not candidates:
+        return candidates
+
+    # 归一化输入版本号
+    from ...collector.versioning import normalize_kernel_version, parse_version_tuple
+    normalized = normalize_kernel_version(target_version) or target_version
+    parsed = parse_version_tuple(normalized)
+    if not parsed:
+        return candidates
+    target_major, target_minor, _ = parsed
+
+    for cand in candidates:
+        # 优先使用显式版本元数据
+        cand_major = cand.get("kernel_version_major")
+        cand_minor = cand.get("kernel_version_minor")
+
+        if cand_major is None or cand_minor is None:
+            # 回退：从 kernel_version 字符串解析
+            kv = cand.get("kernel_version", "")
+            if kv:
+                kv_parts = kv.split(".")
+                try:
+                    cand_major = int(kv_parts[0])
+                    cand_minor = int(kv_parts[1])
+                except (ValueError, IndexError):
+                    pass
+
+        if cand_major is None or cand_minor is None:
+            # 版本未知 — 略微降权
+            base_score = cand.get("_boosted_score", cand.get("score", 1.0))
+            cand["_boosted_score"] = base_score * 0.90
+            cand["_version_weight"] = 0.90
+            continue
+
+        # 计算版本距离
+        dist = (cand_major - target_major) * 1000 + (cand_minor - target_minor)
+
+        if dist == 0:
+            weight = 1.30
+        elif 1 <= dist <= 2:
+            weight = 1.15
+        elif 3 <= dist <= 5:
+            weight = 1.00
+        elif dist >= 6:
+            weight = 0.70
+        elif dist < 0:
+            weight = 1.00
+        else:
+            weight = 0.90
+
+        base_score = cand.get("_boosted_score", cand.get("score", 1.0))
+        cand["_boosted_score"] = base_score * weight
+        cand["_version_weight"] = weight
+
+    return candidates
 
 
 def filter_duplicates(
@@ -519,8 +632,13 @@ def apply_filters(
     # 6. 安全补丁加权
     if boost_security:
         items = boost_security_fixes(items)
-        # 按加权后分数排序
-        items.sort(key=lambda c: c.get("_boosted_score", c.get("score", 0)), reverse=True)
+
+    # 7. 版本软加权 (非破坏性 — 调整 _boosted_score)
+    if kernel_version:
+        items = weight_by_kernel_version(items, kernel_version)
+
+    # 按加权后分数排序
+    items.sort(key=lambda c: c.get("_boosted_score", c.get("score", 0)), reverse=True)
 
     return items
 
@@ -590,7 +708,9 @@ __all__ = [
     "filter_by_kernel_version",
     "filter_duplicates",
     "filter_by_keywords",
+    # 加权
     "boost_security_fixes",
+    "weight_by_kernel_version",
     # 流水线
     "apply_filters",
     # 工具

@@ -126,6 +126,16 @@ Call Trace:
 
     <!-- 结果展示区域 -->
     <div v-if="showResult && currentTask" class="result-area fade-in-up">
+      <!-- 操作栏 — 新建分析 / 查看历史 -->
+      <div class="result-toolbar">
+        <el-button type="primary" @click="resetForm" :icon="Plus">
+          新建分析
+        </el-button>
+        <el-button @click="$router.push('/history')" :icon="Clock">
+          查看历史
+        </el-button>
+      </div>
+
       <!-- 进度条 (分析中) -->
       <el-card v-if="currentTask.status === 'running'" shadow="hover" class="progress-card">
         <div class="progress-header">
@@ -509,6 +519,13 @@ watch(() => route.query.task, (taskId) => {
 }
 
 .input-card { margin-bottom: 24px; }
+
+/* ── 结果操作栏 ────────────────────────────────── */
+.result-toolbar {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
 
 .quick-examples {
   display: flex;

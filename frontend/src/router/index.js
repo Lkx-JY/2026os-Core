@@ -7,7 +7,6 @@ import { createRouter, createWebHistory } from 'vue-router'
  *   /              → Dashboard    系统概览仪表盘
  *   /analyze       → CrashAnalysis 宕机日志分析 (核心页面)
  *   /knowledge     → KnowledgeBase 补丁知识库搜索
- *   /llm-explain   → LlmExplain   LLM分析解释
  *   /history       → History       历史分析记录
  */
 const routes = [
@@ -32,12 +31,6 @@ const routes = [
         name: 'AnalysisResult',
         component: () => import('@/views/CrashAnalysis.vue'),
         meta: { title: '分析结果', hidden: true },
-      },
-      {
-        path: 'llm-explain',
-        name: 'LlmExplain',
-        component: () => import('@/views/LlmExplain.vue'),
-        meta: { title: 'LLM分析解释', icon: 'MessageSquare' },
       },
       {
         path: 'knowledge',
