@@ -189,8 +189,8 @@ async def search_commits(
     using_real = _is_index_ready()
     if using_real:
         logger.info(f"使用真实向量检索: query='{request.query}'")
-        # ★ 真实向量检索 (使用用户指定的 top_k，默认 200)
-        effective_top_k = max(request.top_k, 100) if request.top_k else 200
+        # ★ 真实向量检索 (基于 page_size 计算召回量，最小 100)
+        effective_top_k = max(request.page_size * 5, 100)
         all_results = _search_real(
             query=request.query,
             top_k=effective_top_k,

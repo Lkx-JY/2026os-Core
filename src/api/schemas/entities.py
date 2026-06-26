@@ -34,7 +34,7 @@ class MatchedPatch(BaseModel):
     """匹配到的补丁，含相关性评分与推理"""
     rank: int = Field(..., description="排名序号 (1-based)")
     commit: CommitInfo = Field(..., description="Commit 详细信息")
-    relevance_score: float = Field(..., ge=0.0, le=1.0, description="综合相关性分数")
+    relevance_score: float = Field(..., ge=0.0, description="综合相关性分数")
     recall_score: Optional[float] = Field(default=None, description="向量召回相似度")
     rerank_score: Optional[float] = Field(default=None, description="Reranker 精确匹配分")
     match_reason: str = Field(default="", description="匹配理由说明")
