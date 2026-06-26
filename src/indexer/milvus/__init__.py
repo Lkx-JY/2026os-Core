@@ -970,11 +970,16 @@ class MilvusClient:
         4. backend_type="milvus" → 先试 Milvus Docker, 不可用则试 Milvus Lite
         5. auto → Milvus Lite > Milvus Docker > FAISS
         """
+        # 环境变量 FAISS_INDEX_PATH 可覆盖默认路径 (用于本地完整数据测试)
+        env_faiss_path = os.environ.get("FAISS_INDEX_PATH", "").strip()
+        if env_faiss_path:
+            self.faiss_index_path = env_faiss_path
+
         force_faiss = os.environ.get("MILVUS_FORCE_FAISS", "").strip() in ("1", "true", "yes")
 
         if force_faiss:
             self._active_backend = BackendType.FAISS
-            print("FAISS 模式 (MILVUS_FORCE_FAISS=1)")
+            print(f"FAISS 模式 (MILVUS_FORCE_FAISS=1, path={self.faiss_index_path})")
             self._try_load_faiss()
             return
 

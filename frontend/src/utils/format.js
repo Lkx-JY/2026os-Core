@@ -39,10 +39,16 @@ export function formatNumber(num) {
   return num.toLocaleString()
 }
 
-/** 格式化百分比 */
+/** 格式化百分比 (仅用于 0~1 范围内的值, 如 Rerank score) */
 export function formatPercent(value) {
   if (value == null) return '—'
   return `${(value * 100).toFixed(1)}%`
+}
+
+/** 格式化分数 (raw score, >1 时直接显示数值, 如 2.81 / 12.00) */
+export function formatScore(value) {
+  if (value == null) return '—'
+  return value.toFixed(2)
 }
 
 /** 截断 commit hash */

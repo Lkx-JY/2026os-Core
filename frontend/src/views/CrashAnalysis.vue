@@ -220,12 +220,9 @@ Call Trace:
           >
             <div class="patch-rank">
               <span class="rank-number">#{{ patch.rank }}</span>
-              <el-progress
-                :percentage="Math.round(patch.relevance_score * 100)"
-                :stroke-width="8"
-                :color="rankColor(patch.rank)"
-                style="width: 80px;"
-              />
+              <el-tag :type="patch.rank === 1 ? 'danger' : 'info'" size="small">
+                {{ patch.rank === 1 ? 'Top Candidate' : 'Candidate' }}
+              </el-tag>
             </div>
 
             <div class="patch-body">
@@ -263,16 +260,16 @@ Call Trace:
               <!-- Diff 预览 -->
               <el-collapse class="mt-2">
                 <el-collapse-item title="查看 Diff 预览">
-                  <pre class="diff-preview"><code>{{ patch.commit.diff_preview }}</code></pre>
+                  <pre class="diff-preview"><code>{{ patch.commit.diff_preview || '(原始 diff 未存入索引，请查看下方 commit message 了解变更内容)' }}</code></pre>
                 </el-collapse-item>
               </el-collapse>
 
               <!-- 分数详情 -->
               <div class="patch-scores mt-2">
                 <span class="text-sm text-muted">
-                  召回: {{ formatPercent(patch.recall_score) }} |
-                  重排: {{ formatPercent(patch.rerank_score) }} |
-                  综合: {{ formatPercent(patch.relevance_score) }}
+                  Embedding: {{ patch.recall_score?.toFixed(3) || '—' }} |
+                  Rerank: {{ formatPercent(patch.rerank_score) }} |
+                  Final: {{ formatScore(patch.relevance_score) }}
                 </span>
               </div>
             </div>
@@ -327,7 +324,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAnalysisStore } from '@/stores/analysis'
 import {
-  bugTypeLabel, shortHash, formatPercent, copyToClipboard,
+  bugTypeLabel, shortHash, formatPercent, formatScore, copyToClipboard,
 } from '@/utils/format'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'

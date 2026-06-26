@@ -4,6 +4,7 @@
 """
 
 import time
+from typing import Optional
 
 from fastapi import APIRouter, Depends
 
@@ -23,20 +24,29 @@ _mock_stats = {
 }
 
 
+# 统计数据内存缓存 (启动时由 lifespan 预热，避免每次解析 1.7GB JSON)
+_stats_cache: Optional[dict] = None
+
+
 def _get_real_stats() -> dict:
-    """从向量库获取真实统计数据"""
+    """从向量库获取真实统计数据 (内存缓存)."""
+    global _stats_cache
+    if _stats_cache is not None:
+        return _stats_cache
+
     try:
         from ...indexer.milvus import get_milvus_client
         client = get_milvus_client()
         stats = client.get_stats()
         count = client.count()
-        return {
+        _stats_cache = {
             "total_commits": count,
             "vector_db_size": count,
             "backend": stats.get("backend", "unknown"),
             "index_type": stats.get("index_type", "unknown"),
             "has_real_data": count > 0,
         }
+        return _stats_cache
     except Exception as e:
         logger.warning(f"获取向量库统计失败: {e}")
         return {"total_commits": 0, "vector_db_size": 0, "has_real_data": False}

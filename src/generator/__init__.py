@@ -31,6 +31,14 @@ from .report import (
     generate_report,
     generate_patch_comparison_table,
 )
+from .patch_explain import (
+    PatchExplain,
+    extract_patch_explanations,
+    build_patch_comparison,
+    build_evidence_summary,
+    build_score_breakdown,
+)
+from .prompt import build_evidence_aware_report_prompt
 
 __all__ = [
     # LLM 接口
@@ -40,6 +48,7 @@ __all__ = [
     # Prompt 工程
     "build_diagnosis_report_prompt",
     "build_patch_explanation_prompt",
+    "build_evidence_aware_report_prompt",
     "build_causal_reasoning_prompt",
     "build_root_cause_analysis_prompt",
     "get_few_shot_example",
@@ -52,4 +61,10 @@ __all__ = [
     "ReportGenerator",
     "generate_report",
     "generate_patch_comparison_table",
+    # Patch Explain (证据提取)
+    "PatchExplain",
+    "extract_patch_explanations",
+    "build_patch_comparison",
+    "build_evidence_summary",
+    "build_score_breakdown",
 ]

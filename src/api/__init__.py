@@ -46,6 +46,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ★ 免费模型可用性检查 ──────────────────────────
     _check_free_model_on_startup()
 
+    # ★ 预热模型和向量库 (避免首次请求等待) ──────────
+    _warmup_models()
+
     # ★ AUTH_API_KEY 检查 (生产环境建议配置) ─────────
     import os as _os
     if not _os.environ.get("AUTH_API_KEY", "").strip():
@@ -93,6 +96,54 @@ def _check_free_model_on_startup():
     logger.info("💡 安装 Ollama 以获得免费的高质量 LLM 分析:")
     logger.info("   curl -fsSL https://ollama.com/install.sh | sh")
     logger.info("   ollama pull qwen2.5:7b")
+
+
+def _warmup_models():
+    """启动时预热所有模型和向量库.
+
+    在 lifespan 中调用，确保首次请求不需要等待冷启动。
+    预热内容:
+    - BGE-M3 Embedding 模型 (约 3-6s)
+    - BGE-Reranker-v2 模型 (约 5-8s)
+    - FAISS 向量库 + 元数据 (约 1-2s，内存索引加载)
+    """
+    import time as _time
+    import os as _os
+
+    t0 = _time.time()
+    logger.info("预热模型和向量库...")
+
+    # 1. 预热 Embedding 模型 (单例，首次调用触发加载)
+    try:
+        from ..indexer.embedding import get_encoder
+        encoder = get_encoder()
+        _ = encoder.get_info()  # 触发 _lazy_init()
+        logger.info(f"  ✓ Embedding 模型就绪 ({_time.time()-t0:.1f}s)")
+    except Exception as e:
+        logger.warning(f"  ⚠ Embedding 预热失败: {e}")
+
+    # 2. 预热 FAISS 向量库 (单例，首次调用加载索引)
+    try:
+        from ..indexer.milvus import get_milvus_client
+        client = get_milvus_client()
+        count = client.count()
+        logger.info(f"  ✓ 向量库就绪: {count:,} 条 ({_time.time()-t0:.1f}s)")
+    except Exception as e:
+        logger.warning(f"  ⚠ 向量库预热失败: {e}")
+
+    # 3. 预热 Reranker 模型 (单例，首次调用触发加载)
+    try:
+        from ..retriever.rerank import get_reranker
+        reranker = get_reranker()
+        _ = reranker.compute_scores(
+            query="warmup test",
+            documents=["warmup document"],
+        )
+        logger.info(f"  ✓ Reranker 模型就绪 ({_time.time()-t0:.1f}s)")
+    except Exception as e:
+        logger.warning(f"  ⚠ Reranker 预热失败: {e} (非致命)")
+
+    logger.info(f"预热完成，总耗时 {_time.time()-t0:.1f}s")
 
 
 def create_app() -> FastAPI:

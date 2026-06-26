@@ -480,12 +480,18 @@ def build_system_prompt(role: str = "kernel_expert") -> str:
     return prompts.get(role, prompts["kernel_expert"])
 
 
+# ★ 证据驱动 Prompt (Parts 1-6)
+from .evidence_prompt import build_evidence_aware_report_prompt  # noqa: E402, F401
+
+
 __all__ = [
     # 报告生成
     "build_diagnosis_report_prompt",
     "build_patch_explanation_prompt",
     # RAG 解释
     "build_rag_explanation_prompt",
+    # 证据驱动报告
+    "build_evidence_aware_report_prompt",
     # 因果推理
     "build_causal_reasoning_prompt",
     # 根因分析

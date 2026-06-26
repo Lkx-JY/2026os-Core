@@ -117,13 +117,47 @@ class BGEEncoder(BaseEncoder):
         """获取初始化错误信息（如果有）"""
         return self._init_error
 
-    def _lazy_init(self):
-        """延迟初始化模型 — 减少启动开销
+    def _resolve_local_model_path(self) -> Optional[str]:
+        """查找本地缓存的模型路径。
 
-        下载策略:
-        1. 优先从本地缓存加载
-        2. 尝试 HuggingFace Hub
-        3. HuggingFace 不可达时自动切换到 ModelScope 镜像
+        优先级: env EMBEDDING_MODEL > ModelScope 缓存 > HF 缓存
+        """
+        import os as _os
+
+        # 1. 环境变量优先
+        env_path = _os.environ.get("EMBEDDING_MODEL", "").strip()
+        if env_path and _os.path.isdir(env_path):
+            return env_path
+
+        # 2. 检查 ModelScope 缓存
+        ms_root = _os.path.expanduser("~/.cache/modelscope/hub")
+        ms_candidates = [
+            _os.path.join(ms_root, "Xorbits", "bge-m3"),
+            _os.path.join(ms_root, self.model_name),
+        ]
+        for path in ms_candidates:
+            if _os.path.isdir(path) and _os.path.isfile(_os.path.join(path, "config.json")):
+                return path
+
+        # 3. 检查 HuggingFace 缓存
+        hf_root = _os.path.expanduser("~/.cache/huggingface/hub")
+        hf_dirname = "models--" + self.model_name.replace("/", "--")
+        hf_snapshots = _os.path.join(hf_root, hf_dirname, "snapshots")
+        if _os.path.isdir(hf_snapshots):
+            for snap in sorted(_os.listdir(hf_snapshots), reverse=True):
+                snap_path = _os.path.join(hf_snapshots, snap)
+                if _os.path.isfile(_os.path.join(snap_path, "config.json")):
+                    return snap_path
+
+        return None
+
+    def _lazy_init(self):
+        """延迟初始化模型 — 优先使用本地缓存，跳过 HuggingFace 网络检查.
+
+        加载策略 (优化后):
+        1. 查找本地模型 (ModelScope > HF 缓存 > 环境变量) → local_files_only=True
+        2. 本地未找到 → ModelScope 下载
+        3. 都不行 → 降级
         """
         if self._initialized:
             return
@@ -131,34 +165,30 @@ class BGEEncoder(BaseEncoder):
         try:
             from sentence_transformers import SentenceTransformer
 
-            # 首先尝试从本地缓存加载
-            try:
+            # ★ 优先使用本地模型，避免 HuggingFace 网络超时
+            local_path = self._resolve_local_model_path()
+            if local_path:
                 self.model = SentenceTransformer(
-                    self.model_name,
+                    local_path,
                     device=self.device,
                     trust_remote_code=True,
                 )
-            except Exception as hf_err:
-                # HuggingFace 不可达，尝试 ModelScope 镜像
-                hf_error_str = str(hf_err).lower()
-                is_network_error = any(kw in hf_error_str for kw in [
-                    "network is unreachable", "connection", "timeout",
-                    "cannot send a request", "client has been closed",
-                ])
-                if is_network_error:
-                    print(f"  HuggingFace 不可达, 尝试 ModelScope 镜像...")
-                    model_id = None
-                    model_path = self._download_from_modelscope()
-                    if model_path:
-                        self.model = SentenceTransformer(
-                            model_path,
-                            device=self.device,
-                            trust_remote_code=True,
-                        )
-                    else:
-                        raise hf_err
+            else:
+                # 本地未找到 → 尝试 ModelScope 下载
+                ms_path = self._download_from_modelscope()
+                if ms_path:
+                    self.model = SentenceTransformer(
+                        ms_path,
+                        device=self.device,
+                        trust_remote_code=True,
+                    )
                 else:
-                    raise hf_err
+                    # 最后的兜底：尝试 HuggingFace (可能很慢)
+                    self.model = SentenceTransformer(
+                        self.model_name,
+                        device=self.device,
+                        trust_remote_code=True,
+                    )
 
             # 验证实际输出维度
             test_vec = self.model.encode(["test"], normalize_embeddings=False)

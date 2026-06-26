@@ -351,6 +351,11 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
         matched_patches = []
         if diagnosis.retrieval_result:
             for item in diagnosis.retrieval_result.top(request.top_k):
+                meta = item.metadata or {}
+
+                # 构建 diff 预览: raw diff 未存储, 从已有元数据合成
+                diff_preview = _build_diff_preview(meta)
+
                 matched_patches.append(MatchedPatch(
                     rank=item.rank,
                     commit=CommitInfo(
@@ -362,7 +367,7 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
                         subsystem=item.subsystem,
                         bug_type=item.bug_type,
                         files_changed=item.metadata.get("files_changed", []) if item.metadata else [],
-                        diff_preview=item.metadata.get("diff_content", "")[:200] if item.metadata else "",
+                        diff_preview=diff_preview,
                     ),
                     relevance_score=round(item.final_score, 3),
                     recall_score=round(item.vector_score, 3),
@@ -401,14 +406,45 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
 
             try:
                 from ...generator.llm import get_llm_client
-                from ...generator.prompt import build_rag_explanation_prompt
-
-                llm = get_llm_client()
-                prompt = build_rag_explanation_prompt(
-                    dmesg_content=request.log_content,
-                    root_cause=root_cause_info,
-                    patches=matched_patches[:5],
+                from ...generator.prompt import build_evidence_aware_report_prompt
+                from ...generator.patch_explain import (
+                    extract_patch_explanations,
+                    build_evidence_summary,
+                    build_evidence_summary_table,
+                    build_score_breakdown,
                 )
+
+                # Step 4a: Patch Explain — 提取结构化证据 (Part 5)
+                explanations = extract_patch_explanations(
+                    ranked_items=diagnosis.retrieval_result.ranked_items[:5]
+                    if diagnosis.retrieval_result else [],
+                    crash_feature=feature,
+                    root_cause_result=root_cause_result,
+                )
+
+                # Step 4b: 构建证据摘要 + 证据表格 + 分数拆解
+                evidence_summary = build_evidence_summary(explanations, feature)
+                evidence_table = build_evidence_summary_table(
+                    crash_feature=feature,
+                    root_cause_result=root_cause_result,
+                    top_patch=explanations[0] if explanations else None,
+                    kernel_version=getattr(feature, "kernel_version", ""),
+                )
+                score_info = build_score_breakdown(explanations, feature, root_cause_result)
+
+                # Step 4c: 构造证据驱动 Prompt
+                prompt = build_evidence_aware_report_prompt(
+                    crash_feature=feature,
+                    root_cause_result=root_cause_result,
+                    patch_explanations=explanations,
+                    kernel_version=getattr(feature, "kernel_version", ""),
+                    evidence_summary=evidence_summary,
+                    evidence_summary_table=evidence_table,
+                    score_breakdown=score_info,
+                )
+
+                # Step 4d: LLM 生成报告
+                llm = get_llm_client()
                 llm_explanation = llm.chat(prompt)
             except Exception as llm_err:
                 logger.warning(f"LLM 调用失败, 使用规则引擎生成解释: {llm_err}")
@@ -437,6 +473,77 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
         if steps and steps[-1].status == "running":
             steps[-1].status = "failed"
             steps[-1].detail = str(e)
+
+
+def _build_diff_preview(meta: dict) -> str:
+    """从元数据构建 diff 预览。
+
+    由于 raw diff 未存入 metadata (过大), 从已有字段合成可读摘要:
+    - 修改文件列表 + 增删行数
+    - 涉及的函数
+    - 修复标签
+    - commit body 前 300 字
+    """
+    parts = []
+
+    # 1. 文件变更摘要
+    file_changes = meta.get("file_changes", [])
+    if file_changes:
+        for fc in file_changes[:3]:
+            fname = fc.get("filename", "?")
+            added = fc.get("added_lines", 0)
+            deleted = fc.get("deleted_lines", 0)
+            parts.append(f"  {fname} (+{added}/-{deleted})")
+        if len(file_changes) > 3:
+            parts.append(f"  ... and {len(file_changes)-3} more files")
+    elif meta.get("files_changed"):
+        for f in (meta["files_changed"] or [])[:3]:
+            parts.append(f"  {f}")
+    if parts:
+        parts.insert(0, "Modified files:")
+
+    # 2. 修改函数
+    functions = meta.get("functions", [])
+    if functions:
+        func_str = ", ".join(functions[:8])
+        if len(functions) > 8:
+            func_str += f" ... (+{len(functions)-8} more)"
+        parts.append(f"Functions: {func_str}")
+
+    # 3. 修复标签
+    fix_tags = meta.get("fix_tags", [])
+    if fix_tags:
+        parts.append(f"Tags: {', '.join(fix_tags[:5])}")
+
+    # 4. 修复特征
+    features = []
+    if meta.get("lock_added"):
+        features.append("lock_added")
+    if meta.get("refcount_fix"):
+        features.append("refcount_fix")
+    if meta.get("rcu_fix"):
+        features.append("rcu_fix")
+    if features:
+        parts.append(f"Fix features: {', '.join(features)}")
+
+    # 5. 内核版本 + 插入/删除
+    kv = meta.get("kernel_version", "")
+    ins = meta.get("insertions", 0)
+    dele = meta.get("deletions", 0)
+    if kv or ins or dele:
+        info_parts = []
+        if kv:
+            info_parts.append(f"v{kv}")
+        if ins or dele:
+            info_parts.append(f"+{ins}/-{dele}")
+        parts.append(" | ".join(info_parts))
+
+    # 6. commit body 摘要 (关键信息)
+    body = (meta.get("body", "") or "")[:300]
+    if body:
+        parts.append(f"\nCommit message:\n{body}")
+
+    return "\n".join(parts) if parts else "(diff not available - raw diff not stored in index)"
 
 
 def _generate_real_explanation(root_cause: RootCauseInfo, patches: list[MatchedPatch]) -> str:
