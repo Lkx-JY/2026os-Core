@@ -226,52 +226,79 @@ Call Trace:
             </div>
 
             <div class="patch-body">
+              <!-- ═══ Zone 1: 基本信息 ═══ -->
               <h4 class="patch-title">
                 {{ patch.commit.title }}
-                <el-button
-                  text
-                  size="small"
-                  @click="copyText(patch.commit.commit_id)"
-                >
+                <el-button text size="small" @click="copyText(patch.commit.commit_id)">
                   <el-icon><CopyDocument /></el-icon>
                   {{ shortHash(patch.commit.commit_id) }}
                 </el-button>
               </h4>
-
-              <p class="patch-message text-muted">{{ patch.commit.message }}</p>
-
               <div class="patch-meta">
-                <el-tag size="small">{{ patch.commit.author }}</el-tag>
+                <el-tag size="small" type="info">{{ patch.commit.author }}</el-tag>
                 <el-tag size="small" type="info">{{ patch.commit.date }}</el-tag>
-                <el-tag size="small" type="warning" v-if="patch.diff_highlights?.length">
-                  {{ patch.diff_highlights[0] }}
-                </el-tag>
+                <el-tag size="small" v-if="patch.commit.subsystem && patch.commit.subsystem !== 'unknown'">{{ patch.commit.subsystem }}</el-tag>
+                <el-tag size="small" type="warning" v-if="patch.commit.bug_type && patch.commit.bug_type !== 'unknown'">{{ patch.commit.bug_type }}</el-tag>
               </div>
 
-              <div class="patch-reason mt-2">
-                <el-alert
-                  :title="patch.match_reason"
-                  type="success"
-                  :closable="false"
-                  show-icon
-                />
+              <!-- ═══ Zone 2: Matching Evidence 匹配依据 ═══ -->
+              <div class="matching-evidence mt-3">
+                <div class="evidence-title">Matching Evidence</div>
+                <div class="evidence-items">
+                  <span class="evidence-item" v-if="patch.match_reason?.includes('subsystem') || patch.commit.subsystem">
+                    <span class="evidence-check">✓</span> Same Subsystem
+                  </span>
+                  <span class="evidence-item" v-if="patch.match_reason?.includes('bug') || patch.commit.bug_type">
+                    <span class="evidence-check">✓</span> Same Bug Type
+                  </span>
+                  <span class="evidence-item" v-if="patch.recall_score > 0">
+                    <span class="evidence-check">✓</span> High Semantic Similarity
+                  </span>
+                  <span class="evidence-item" v-if="patch.rerank_score > 0">
+                    <span class="evidence-check">✓</span> Cross Encoder Rank #{{ patch.rank }}
+                  </span>
+                  <span class="evidence-item" v-if="patch.match_reason">
+                    <span class="evidence-check">✓</span> {{ patch.match_reason }}
+                  </span>
+                </div>
               </div>
 
-              <!-- Diff 预览 -->
+              <!-- ═══ Zone 3: Matching Score 评分 ═══ -->
+              <div class="matching-score mt-3">
+                <div class="score-item">
+                  <span class="score-label">Embedding Similarity</span>
+                  <span class="score-value">{{ patch.recall_score?.toFixed(3) || '—' }}</span>
+                </div>
+                <div class="score-item">
+                  <span class="score-label">Cross Encoder Score</span>
+                  <span class="score-value">{{ patch.reranker_score?.toFixed(3) || '—' }}</span>
+                </div>
+                <div class="score-item final-score">
+                  <span class="score-label">Final Score</span>
+                  <span class="score-value">{{ formatScore(patch.relevance_score) }}</span>
+                </div>
+              </div>
+
+              <!-- ═══ Zone 4: Commit Message (默认展开3行) ═══ -->
+              <div class="commit-message-block mt-3" v-if="patch.commit.message">
+                <div class="message-preview" :class="{ expanded: patch._msgExpanded }">
+                  {{ patch._msgExpanded ? patch.commit.message : (patch.commit.message?.slice(0, 200) || '') }}
+                </div>
+                <el-button
+                  v-if="(patch.commit.message?.length || 0) > 200"
+                  text size="small" type="primary"
+                  @click="patch._msgExpanded = !patch._msgExpanded"
+                >
+                  {{ patch._msgExpanded ? '[收起]' : '[展开更多]' }}
+                </el-button>
+              </div>
+
+              <!-- ═══ Zone 5: Diff 预览 ═══ -->
               <el-collapse class="mt-2">
                 <el-collapse-item title="查看 Diff 预览">
-                  <pre class="diff-preview"><code>{{ patch.commit.diff_preview || '(原始 diff 未存入索引，请查看下方 commit message 了解变更内容)' }}</code></pre>
+                  <pre class="diff-preview"><code>{{ patch.commit.diff_preview || '(原始 diff 未存入索引)' }}</code></pre>
                 </el-collapse-item>
               </el-collapse>
-
-              <!-- 分数详情 -->
-              <div class="patch-scores mt-2">
-                <span class="text-sm text-muted">
-                  Embedding: {{ patch.recall_score?.toFixed(3) || '—' }} |
-                  Rerank: {{ formatPercent(patch.rerank_score) }} |
-                  Final: {{ formatScore(patch.relevance_score) }}
-                </span>
-              </div>
             </div>
           </div>
 
@@ -293,12 +320,43 @@ Call Trace:
           </template>
         </el-alert>
 
-        <!-- LLM 解释 -->
+        <!-- LLM 分析报告 -->
         <el-card shadow="hover" class="section-card mt-4" v-if="currentTask.result.llm_explanation">
           <template #header>
-            <span>🤖 LLM 分析报告</span>
+            <div class="section-header">
+              <span>🤖 LLM Analysis Report</span>
+              <el-tag size="small" type="info">Evidence-Aware</el-tag>
+            </div>
           </template>
           <div class="llm-explanation" v-html="renderedExplanation"></div>
+        </el-card>
+
+        <!-- ═══ Ranking Strategy 排序策略说明 ═══ -->
+        <el-card shadow="hover" class="section-card mt-4" v-if="currentTask.result.matched_patches?.length">
+          <template #header>
+            <span>📊 Ranking Strategy</span>
+          </template>
+          <div class="ranking-strategy">
+            <p class="text-sm text-muted mb-2">Final Score = Expert Rule + Embedding Similarity + Cross Encoder Rerank</p>
+            <div class="strategy-items">
+              <div class="strategy-item">
+                <el-tag size="small" type="primary">Expert Rule</el-tag>
+                <span class="text-sm ml-2">Subsystem match + Bug Type match (28 expert rules)</span>
+              </div>
+              <div class="strategy-item mt-2">
+                <el-tag size="small" type="success">Embedding Similarity</el-tag>
+                <span class="text-sm ml-2">BGE-M3 semantic vector retrieval (1024-dim)</span>
+              </div>
+              <div class="strategy-item mt-2">
+                <el-tag size="small" type="warning">Cross Encoder Rerank</el-tag>
+                <span class="text-sm ml-2">BGE-Reranker-v2 cross-encoder re-ranking</span>
+              </div>
+              <div class="strategy-item mt-2" v-if="currentTask.result.root_cause?.kernel_version">
+                <el-tag size="small" type="danger">Version Match</el-tag>
+                <span class="text-sm ml-2">Kernel version filtering + weighting</span>
+              </div>
+            </div>
+          </div>
         </el-card>
       </template>
 
@@ -640,5 +698,91 @@ watch(() => route.query.task, (taskId) => {
   border-radius: 4px;
   font-size: 12px;
   color: #e53935;
+}
+
+/* ── Matching Evidence ────────────────────────── */
+.matching-evidence {
+  background: rgba(76, 175, 80, 0.06);
+  border: 1px solid rgba(76, 175, 80, 0.15);
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+.evidence-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #2e7d32;
+  margin-bottom: 8px;
+}
+.evidence-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+.evidence-item {
+  font-size: 12px;
+  color: var(--color-text);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.evidence-check {
+  color: #4caf50;
+  font-weight: 700;
+}
+
+/* ── Matching Score ───────────────────────────── */
+.matching-score {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.score-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 16px;
+  background: rgba(25, 118, 210, 0.06);
+  border-radius: 8px;
+  min-width: 120px;
+}
+.score-item.final-score {
+  background: rgba(25, 118, 210, 0.12);
+  border: 1px solid rgba(25, 118, 210, 0.25);
+}
+.score-label {
+  font-size: 11px;
+  color: var(--color-text-muted, #78909c);
+  margin-bottom: 2px;
+}
+.score-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-primary, #1976D2);
+}
+
+/* ── Commit Message Block ─────────────────────── */
+.commit-message-block {
+  border-left: 3px solid var(--color-border, #e0e0e0);
+  padding-left: 12px;
+}
+.message-preview {
+  font-size: 13px;
+  color: var(--color-text-muted, #78909c);
+  line-height: 1.6;
+  max-height: 4.8em;
+  overflow: hidden;
+  transition: max-height 0.3s;
+}
+.message-preview.expanded {
+  max-height: none;
+}
+
+/* ── Ranking Strategy ─────────────────────────── */
+.strategy-items {
+  padding: 8px 0;
+}
+.strategy-item {
+  display: flex;
+  align-items: center;
 }
 </style>
