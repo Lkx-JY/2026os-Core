@@ -113,11 +113,38 @@ class BGEReranker:
             model_name: HuggingFace 模型名称
             device: 设备 ("cpu", "cuda")，None 时自动检测
         """
-        self.model_name = model_name
+        import os as _os
+        # 优先使用环境变量指定的本地模型路径
+        self.model_name = _os.environ.get("RERANKER_MODEL", model_name)
         self.device = device or self._auto_device()
         self.model = None
         self.tokenizer = None
         self._initialized = False
+        # 缓存本地模型路径（ModelScope 镜像）
+        self._local_model_path: Optional[str] = None
+
+    def _resolve_local_path(self) -> Optional[str]:
+        """尝试查找本地缓存的模型路径（ModelScope / 本地目录）"""
+        import os as _os
+        # 1. 如果 model_name 本身是本地路径且存在
+        if _os.path.isdir(self.model_name):
+            return self.model_name
+        # 2. 检查 ModelScope 缓存
+        modelscope_root = _os.path.expanduser("~/.cache/modelscope/hub")
+        candidate = _os.path.join(modelscope_root, self.model_name)
+        if _os.path.isdir(candidate):
+            return candidate
+        # 3. 检查 HF 缓存
+        hf_root = _os.path.expanduser("~/.cache/huggingface/hub")
+        hf_dirname = "models--" + self.model_name.replace("/", "--")
+        hf_candidate = _os.path.join(hf_root, hf_dirname, "snapshots")
+        if _os.path.isdir(hf_candidate):
+            # 取第一个可用的 snapshot
+            for snap in sorted(_os.listdir(hf_candidate)):
+                snap_path = _os.path.join(hf_candidate, snap)
+                if _os.path.isfile(_os.path.join(snap_path, "config.json")):
+                    return snap_path
+        return None
 
     @staticmethod
     def _auto_device() -> str:
@@ -135,9 +162,19 @@ class BGEReranker:
             return
         try:
             from transformers import AutoModelForSequenceClassification, AutoTokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+
+            # 优先使用本地模型路径，避免访问 HuggingFace
+            local_path = self._resolve_local_path()
+            load_kwargs = {}
+            if local_path:
+                load_kwargs = {"local_files_only": True}
+                model_path = local_path
+            else:
+                model_path = self.model_name
+
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path, **load_kwargs)
             self.model = AutoModelForSequenceClassification.from_pretrained(
-                self.model_name
+                model_path, **load_kwargs
             )
             self.model.eval()
             # 如果 cuda 可用，移动模型到 GPU

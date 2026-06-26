@@ -263,12 +263,12 @@ def run_retrieval_pipeline(
 
     # ── Phase 3: BGE Rerank ────────────────────────────────────
     t_rerank = time.time()
-    rerank_candidates = candidates[:rerank_top_k]
-    vector_scores = [c.get("_boosted_score", c.get("score", 0.5)) for c in rerank_candidates]
+    candidates_to_rerank = candidates[:rerank_top_k]
+    vector_scores = [c.get("_boosted_score", c.get("score", 0.5)) for c in candidates_to_rerank]
 
     ranked_result = rerank_candidates(
         query_text=query_text,
-        candidates=rerank_candidates,
+        candidates=candidates_to_rerank,
         vector_scores=vector_scores,
         use_llm_judge=use_llm_judge,
     )
