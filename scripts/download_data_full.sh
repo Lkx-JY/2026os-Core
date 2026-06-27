@@ -55,7 +55,7 @@ check_cmd() {
 
 echo ""
 echo "============================================"
-echo "  CoreLinuxCommit — 全量数据库部署"
+echo "  project3136859-388917 — 全量数据库部署"
 echo "============================================"
 echo ""
 log_info "目标目录: $TARGET_DIR"

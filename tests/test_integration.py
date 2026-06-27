@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Core.LinuxCommit — 本地功能集成测试脚本
+project3136859-388917 — 本地功能集成测试脚本
 
 运行方式:
    source venv/bin/activate
@@ -488,7 +488,7 @@ def test_retrieval_pipeline():
 def main():
     print("""
 ╔══════════════════════════════════════════════════════════╗
-║     Core.LinuxCommit — 本地功能集成测试                  ║
+║     project3136859-388917 — 本地功能集成测试              ║
 ║     Kernel Crash → Patch Matching System                 ║
 ╚══════════════════════════════════════════════════════════╝
 """)

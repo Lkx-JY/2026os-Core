@@ -47,8 +47,8 @@ Demo 模式使用项目内置的轻量数据（9,990 条 commit），无需额�
 
 ```bash
 # 1. 克隆项目
-git clone <repo-url> CoreLinuxCommit
-cd CoreLinuxCommit
+git clone <repo-url>
+cd project3136859-388917
 
 # 2. 创建虚拟环境
 python3 -m venv venv
@@ -64,6 +64,30 @@ python -m src.main
 访问 http://localhost:8000/api/docs 查看 API 文档。
 
 > **注意**: Demo 数据已内置于 `data/` 目录，首次启动自动加载（约 5 秒预热）。
+
+### 2.1 Demo 与全量模式切换
+
+项目默认使用内置的 Demo 数据（`data/`，9,990 条）。部署全量数据后，通过环境变量切换：
+
+```bash
+# Demo 模式（默认，无需设置）
+python -m src.main
+
+# 全量模式（需先下载全量数据）
+export FAISS_INDEX_PATH=./data_full/faiss_index
+python -m src.main
+
+# 切回 Demo 模式
+unset FAISS_INDEX_PATH
+python -m src.main
+```
+
+启动日志中会显示当前使用的数据量：
+
+```
+✓ 向量库就绪: 9,990 条    ← Demo 模式
+✓ 向量库就绪: 312,632 条  ← 全量模式
+```
 
 ---
 
@@ -260,7 +284,7 @@ curl http://localhost:8000/api/v1/stats | python3 -m json.tool | grep total_comm
 ## 7. 项目结构
 
 ```
-CoreLinuxCommit/
+project3136859-388917/
 ├── scripts/
 │   └── download_data_full.sh    ← 全量数据部署脚本
 ├── src/

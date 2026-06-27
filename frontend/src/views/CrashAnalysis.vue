@@ -137,22 +137,6 @@ Call Trace:
 
     <!-- 结果展示区域 -->
     <div v-if="showResult && currentTask" class="result-area fade-in-up">
-      <!-- ★ 缺失关键证据提示横幅 -->
-      <el-alert
-        v-if="hasMissingCriticalEvidence"
-        title="⚠️ 关键证据缺失 — 分析精度受限"
-        type="warning"
-        :closable="false"
-        show-icon
-        class="mb-4"
-      >
-        <ul style="margin: 4px 0; padding-left: 18px;">
-          <li v-if="!hasCallTrace">Call Trace 缺失 — 无法进行调用栈级别的根因确认</li>
-          <li v-if="!hasKernelVersion">Kernel Version 未知 — 版本过滤和兼容性评估不可用</li>
-        </ul>
-        当前分析主要依赖 panic 关键词和语义检索，建议补充以上信息后重新分析以获得更准确的结果。
-      </el-alert>
-
       <!-- 操作栏 — 新建分析 / 查看历史 -->
       <div class="result-toolbar">
         <el-button type="primary" @click="resetForm" :icon="Plus">
@@ -673,18 +657,6 @@ Call Trace:
             </div>
           </div>
 
-          <!-- ★ Top1/Top2 差距过小警告 -->
-          <el-alert
-            v-if="scoreGapWarning"
-            title="注意：Top-1 与 Top-2 分数差距极小"
-            type="warning"
-            :closable="false"
-            show-icon
-            class="mt-3"
-          >
-            两者综合评分仅差 {{ scoreGapValue }}，建议同时审查这两个补丁的 Diff 后再做决定。
-          </el-alert>
-
           <el-empty v-if="!currentTask.result.matched_patches?.length" description="未找到匹配的补丁" />
         </el-card>
 
@@ -917,31 +889,6 @@ const renderedExplanation = computed(() => {
   return DOMPurify.sanitize(marked(text))
 })
 
-// ★ 关键证据缺失检测
-const hasCallTrace = computed(() => {
-  const ev = currentTask.value?.result?.root_cause?.evidence
-  return !!(ev?.trace_functions?.length)
-})
-const hasKernelVersion = computed(() => {
-  const ev = currentTask.value?.result?.root_cause?.evidence
-  return !!(ev?.kernel_version)
-})
-const hasMissingCriticalEvidence = computed(() => {
-  return !hasCallTrace.value || !hasKernelVersion.value
-})
-
-// ★ Top1/Top2 差距过小警告
-const scoreGapWarning = computed(() => {
-  const patches = currentTask.value?.result?.matched_patches || []
-  if (patches.length < 2) return false
-  const gap = patches[0].relevance_score - patches[1].relevance_score
-  return gap < 0.01
-})
-const scoreGapValue = computed(() => {
-  const patches = currentTask.value?.result?.matched_patches || []
-  if (patches.length < 2) return '0'
-  return (patches[0].relevance_score - patches[1].relevance_score).toFixed(4)
-})
 
 // ── 快速示例 ───────────────────────────────────
 const quickExamples = [

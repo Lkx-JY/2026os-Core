@@ -719,9 +719,8 @@ def compute_score_breakdown(
 
     # ── 4. 版本匹配度 (从 metadata 中获取) ──
     # _version_weight: 0.70 (penalty) ~ 1.30 (bonus), 1.0 = neutral
-    # 保留完整范围以体现版本的正面/负面影响
     raw_version_weight = item.metadata.get("_version_weight", 1.0)
-    version_match_score = max(0.0, min(1.5, raw_version_weight))  # cap at 1.5 for extremes
+    version_match_score = max(0.0, min(2.0, raw_version_weight))
 
     # ── 5. 综合分数 ──────────────────────────
     W = EXPLAINABLE_FUSION_WEIGHTS

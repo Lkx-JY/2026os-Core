@@ -535,13 +535,13 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
                     ),
                 })
 
-            # ★ Embedding Similarity 批次相对归一化 — 确保不全部显示 1.000
-            # 问题: FAISS 向量未归一化时 IP > 1, _normalize_raw_distance 全部 clamp 到 1.0
-            # 修复: 取批次内 max recall_score, 其余按比例映射, 保证排序区分度
+            # ★ Embedding Similarity 批次归一化 — 仅在向量未归一化(IP > 1)时触发
+            # 归一化向量(IP ∈ [0,1])直接透传，保留真实的余弦相似度
             raw_recalls = [tp["patch"].recall_score for tp in temp_patches if tp["patch"].recall_score]
             if raw_recalls:
                 max_recall = max(raw_recalls)
-                if max_recall > 0:
+                if max_recall > 1.0:
+                    # 非归一化向量: 按 batch_max 等比缩放
                     for tp in temp_patches:
                         if tp["patch"].recall_score is not None:
                             tp["patch"].recall_score = round(

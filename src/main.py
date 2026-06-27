@@ -1,4 +1,4 @@
-"""Core.LinuxCommit — 启动脚本
+"""project3136859-388917 — 启动脚本
 
 Usage:
     python -m src.main                    # 开发模式启动
@@ -30,7 +30,7 @@ def main():
 
     print(f"""
 ╔══════════════════════════════════════════════════════════╗
-║        Core.LinuxCommit — API Server                    ║
+║        project3136859-388917 — API Server               ║
 ║        Kernel Crash → Patch Matching System             ║
 ╠══════════════════════════════════════════════════════════╣
 ║  API Docs:  http://{host}:{port}/api/docs              ║

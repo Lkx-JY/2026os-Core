@@ -49,8 +49,8 @@ class ScoreBreakdown(BaseModel):
 
     # ── 版本维度 ──
     version_match_score: float = Field(
-        default=0.0, ge=0.0, le=1.0,
-        description="版本匹配度 — 补丁内核版本与崩溃内核版本的兼容性评分 (★ 已融入 final_score)"
+        default=0.0, ge=0.0, le=2.0,
+        description="版本匹配度 — 0.7(惩罚)~1.0(中性)~1.3(精确匹配加权), 已融入 final_score"
     )
 
     # ── LLM 维度 ──

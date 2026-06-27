@@ -1,4 +1,4 @@
-"""Pytest fixtures and shared configuration for Core.LinuxCommit tests."""
+"""Pytest fixtures and shared configuration for project3136859-388917 tests."""
 
 import os
 import sys

@@ -372,7 +372,18 @@ cd frontend && npm run dev
 - **API 文档**: http://localhost:8000/api/docs (Swagger)
 - **健康检查**: http://localhost:8000/health
 
-### 6.5 Docker 部署
+> **关于数据**: 项目内置了 Demo 数据（`data/`，9,990 条），启动即可使用。
+> 如需更高检索精度，可部署全量数据库（312,632 条），详见下方部署文档。
+
+### 6.5 部署文档
+
+| 文档 | 路径 | 说明 |
+|------|------|------|
+| 完整部署指南 | [`docs/DEPLOY.md`](docs/DEPLOY.md) | 环境要求、Demo/全量模式、LLM配置、常见问题 |
+| 全量数据部署 | [`scripts/DEPLOY.md`](scripts/DEPLOY.md) | 123云盘直链下载全量数据库的详细步骤 |
+| 全量数据快速部署 | [`data_full/DEPLOY.md`](data_full/DEPLOY.md) | 全量数据的快速部署说明 |
+
+### 6.6 Docker 部署
 
 ```bash
 cd docker
