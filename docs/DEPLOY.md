@@ -25,7 +25,7 @@
 | curl | 7.0+ | 下载全量数据 |
 | zstd | 1.4+ | 解压数据包 |
 | Node.js | 18+ | 前端构建（可选，dist/ 已包含构建产物） |
-| 磁盘空间 | ≥ 5 GB | 索引存储（Demo: 80MB / 全量: 2.5GB） |
+| 磁盘空间 | ≥ 5 GB | 索引存储（Demo: 80MB / 全量: 3.1 GB） |
 | 内存 | ≥ 4 GB | Embedding 模型 + FAISS 索引 |
 
 ### 安装系统依赖
@@ -69,44 +69,26 @@ python -m src.main
 
 ## 3. 全量数据库部署
 
-全量数据库包含 **79,192 条**经过版本标注的 Linux Kernel commit，覆盖内核版本 4.9 ~ 6.13，向量维度 1024（BGE-M3）。
+全量数据库包含 **312,632 条**经过版本标注的 Linux Kernel commit，覆盖内核版本 4.9 ~ 6.13，向量维度 1024（BGE-M3）。
 
 | 指标 | Demo (data/) | 全量 (data_full/) |
 |------|-------------|------------------|
-| Commit 数 | 9,990 | **79,192** |
-| 存储大小 | ~80 MB | **~2.5 GB** |
+| Commit 数 | 9,990 | **312,632** |
+| 存储大小 | ~80 MB | **~3.1 GB** |
 | 内核版本覆盖 | 4.9 ~ 6.13 | 4.9 ~ 6.13 |
 | 版本标注 | 部分 | **全部** |
 | Top-3 预期命中率 | 基准 | **显著提升** |
 
-### 3.1 一键部署
+### 3.1 一键部署（详细部署可参考scripts/目录下的DEPLOY.md文件）
 
 ```bash
 # 在项目根目录执行
 bash scripts/download_data_full.sh ./data_full
 ```
 
-脚本自动完成：下载 → SHA256 校验 → 解压 → 就绪。
+脚本自动完成：下载 → gzip 校验 → 解压 → 就绪。
 
-### 3.2 手动部署
-
-如果自动脚本不可用，手动下载：
-
-```bash
-# 1. 下载数据包
-curl -C - -L -o data_full_v1.0.tar.zst "https://download.123pan.com/xxx/data_full_v1.0.tar.zst"
-
-# 2. 下载校验文件
-curl -L -o data_full_v1.0.sha256 "https://download.123pan.com/xxx/data_full_v1.0.sha256"
-
-# 3. 校验
-sha256sum -c data_full_v1.0.sha256
-
-# 4. 解压
-tar -xf data_full_v1.0.tar.zst --use-compress-program=unzstd
-```
-
-### 3.3 启动（全量模式）
+### 3.2 启动（全量模式）
 
 ```bash
 # 设置全量数据路径
@@ -119,9 +101,9 @@ python -m src.main
 
 预期输出：
 ```
-FAISS 模式 (已有 79192 条数据, path=data_full/faiss_index)
+FAISS 模式 (已有 312632 条数据, path=data_full/faiss_index)
   ✓ Embedding 模型就绪 (3.2s)
-  ✓ 向量库就绪: 79,192 条 (5.1s)
+  ✓ 向量库就绪: 312,632 条 (5.1s)
   ✓ Reranker 模型就绪 (6.8s)
 预热完成，总耗时 6.8s
 API server ready to accept requests
@@ -171,7 +153,7 @@ curl http://localhost:8000/health
 ```json
 {
   "status": "healthy",
-  "service": "Core.LinuxCommit API",
+  "service": "project3136859-388917 API",
   "version": "1.0.0",
   "uptime_seconds": 12.3,
   "memory_mb": 452.1
@@ -212,6 +194,7 @@ curl http://localhost:8000/api/v1/analyze/{task_id}
 
 ```bash
 cd frontend
+npm install    #安装依赖
 npm run dev    # 开发模式
 # 或
 npm run build  # 生产构建 → dist/
@@ -263,7 +246,7 @@ export FAISS_NPROBE=8  # 默认 32，降低可减少内存占用
 
 查看启动日志中的向量数：
 ```
-✓ 向量库就绪: 79,192 条  ← 全量
+✓ 向量库就绪: 312,632 条  ← 全量
 ✓ 向量库就绪: 9,990 条   ← Demo
 ```
 
@@ -290,7 +273,7 @@ CoreLinuxCommit/
 │   ├── knowledge/                ← 内核领域知识库
 │   └── main.py                   ← 服务入口
 ├── data/                         ← Demo 数据 (9,990 条)
-├── data_full/                    ← 全量数据 (部署后, 79,192 条)
+├── data_full/                    ← 全量数据 (部署后, 312,632 条)
 ├── frontend/                     ← Vue3 前端
 ├── configs/                      ← YAML 配置文件
 ├── tests/                        ← 测试用例

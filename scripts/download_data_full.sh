@@ -2,7 +2,7 @@
 # ============================================================================
 # project3136859-388917 — 全量数据库直链部署脚本
 #
-# 从 123 云盘直链下载完整的 FAISS 向量索引和元数据 (79,192 条 commit)。
+# 从 123 云盘直链下载完整的 FAISS 向量索引和元数据 (312,632 条 commit)。
 # 支持断点续传、SHA256 校验、自动解压。
 #
 # 用法:
@@ -25,7 +25,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 TARGET_DIR="${1:-$PROJECT_ROOT/data_full}"
 ARCHIVE="data.tar.gz"
-EXPECTED_SIZE_HINT="~2.3 GB (压缩) → ~2.5 GB (解压后)"
+EXPECTED_SIZE_HINT="~1.4 GB (压缩) → ~3.1 GB (解压后)"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 工具函数
@@ -60,7 +60,7 @@ echo "============================================"
 echo ""
 log_info "目标目录: $TARGET_DIR"
 log_info "预期大小: $EXPECTED_SIZE_HINT"
-log_info "数据量:   79,192 条（从 312,632 条全量采集中分层索引）"
+log_info "数据量:   312,632 条"
 echo ""
 
 check_cmd curl curl
@@ -193,22 +193,3 @@ if [ -f "$ACTUAL_DATA_DIR/index_progress.json" ]; then
     cat "$ACTUAL_DATA_DIR/index_progress.json" 2>/dev/null | python3 -m json.tool 2>/dev/null || \
         cat "$ACTUAL_DATA_DIR/index_progress.json"
 fi
-
-echo ""
-echo "────────────────────────────────────────────"
-echo "  启动服务"
-echo "────────────────────────────────────────────"
-echo ""
-echo "  方式一（环境变量）:"
-echo "    export FAISS_INDEX_PATH=$ACTUAL_DATA_DIR/faiss_index"
-echo "    cd $PROJECT_ROOT"
-echo "    source venv/bin/activate"
-echo "    python -m src.main"
-echo ""
-echo "  方式二（软链接）:"
-echo "    ln -sf $ACTUAL_DATA_DIR $PROJECT_ROOT/data_full"
-echo "    cd $PROJECT_ROOT"
-echo "    source venv/bin/activate"
-echo "    python -m src.main"
-echo ""
-echo "============================================"

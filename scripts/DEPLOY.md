@@ -1,6 +1,6 @@
 # 全量数据库部署指南
 
-> 通过 123 云盘直链下载全量向量索引（79,192 条，从 312,632 条 Git Commit 中分层采样构建）。
+> 通过 123 云盘直链下载全量向量索引（312,632 条）。
 
 ---
 
@@ -8,7 +8,7 @@
 
 | 要求 | 说明 |
 |------|------|
-| 磁盘空间 | ≥ 5 GB（压缩包 2.3 GB + 解压后 2.5 GB） |
+| 磁盘空间 | ≥ 5 GB（压缩包 1.4 GB + 解压后 3.1 GB） |
 | 网络 | 能访问 `1860205572.cdn.123clouddisk.com` |
 | 时间 | 首次下载约 5-15 分钟（取决于网速） |
 | 前置软件 | `curl`、`tar`、`gzip`（Linux 系统自带） |
@@ -18,19 +18,20 @@
 ### 第一步：进入项目根目录
 
 ```bash
-cd CoreLinuxCommit
+cd project3136859-388917
 ```
 
 ### 第二步：运行下载脚本
 
 ```bash
-bash scripts/download_data_full.sh
+cd scripts/
+bash download_data_full.sh
 ```
 
 脚本自动完成：
 
 ```
-[1/3] 下载数据文件     → 约 2.3 GB，支持断点续传
+[1/3] 下载数据文件     → 约 1.4 GB，支持断点续传
 [2/3] gzip 完整性校验  → 检查文件是否损坏
 [3/3] 解压数据        → 释放到 data_full/ 目录
 ```
@@ -38,7 +39,8 @@ bash scripts/download_data_full.sh
 **如果下载中断了，直接重新运行就行**，会自动从断点继续：
 
 ```bash
-bash scripts/download_data_full.sh
+cd scripts/
+bash download_data_full.sh
 ```
 
 ## 三、启动全量模式
@@ -52,7 +54,7 @@ python -m src.main
 看到下面这行说明部署成功：
 
 ```
-✓ 向量库就绪: 79,192 条
+✓ 向量库就绪: 312,632 条 
 ```
 
 然后浏览器打开 `http://localhost:8000`。
@@ -76,7 +78,7 @@ curl -X POST http://localhost:8000/api/v1/analyze \
 
 ```bash
 curl http://localhost:8000/api/v1/stats | python3 -m json.tool | grep total_commits
-# 输出: "total_commits": 79192
+# 输出: "total_commits": 312,632
 ```
 
 ## 五、解压后的文件
@@ -136,20 +138,20 @@ bash scripts/download_data_full.sh
 | 项目 | 值 |
 |------|-----|
 | 数据来源 | [Linux Kernel Git](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git) |
-| 已索引 Commit | 79,192（从 312,632 条全量采集中分层筛选） |
+| 已索引 Commit |  312,632 条|
 | 内核版本范围 | 4.9 ~ 6.13 |
 | 向量模型 | BGE-M3 (1024维) |
 | 索引类型 | FAISS IndexIVFFlat (IP度量) |
-| 数据大小 | 压缩 2.3 GB / 解压 2.5 GB |
+| 数据大小 | 压缩 1.4 GB / 解压 3.1 GB |
 | 存储位置 | 123 云盘直链 CDN |
 | 构建日期 | 2026-06-25 |
 
 ## 八、Demo vs 全量
 
-| | Demo | 全量 |
+| | Demo | 全量 | 
 |--|------|------|
 | 数据目录 | `data/` | `data_full/` |
-| 已索引 Commit | 9,990 | **79,192**（全量采集 312,632） |
-| 大小 | ~80 MB | ~2.5 GB |
+| 已索引 Commit | 9,990 | **312,632** |
+| 大小 | ~80 MB | ~3.1 GB |
 | 检索精度 | 基准 | **显著提升** |
-| 适用场景 | 快速验证 | 正式演示/比赛 |
+| 适用场景 | 快速验证 | 正式演示 |
