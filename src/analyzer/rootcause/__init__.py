@@ -1467,12 +1467,181 @@ def get_rule_by_id(rule_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+# ============================================================================
+# 根因证据提取 (可解释性增强)
+# ============================================================================
+
+# panic 消息关键词 → 可读标签映射
+_PANIC_KEYWORD_LABELS: Dict[str, List[str]] = {
+    "NULL pointer dereference": [
+        r"NULL pointer dereference",
+        r"unable to handle kernel NULL pointer",
+    ],
+    "Use-After-Free (KASAN)": [
+        r"KASAN: use-after-free",
+    ],
+    "Double Free (KASAN)": [
+        r"KASAN: double-free",
+    ],
+    "List Corruption": [
+        r"list_del corruption",
+        r"list_add corruption",
+    ],
+    "Out-of-Bounds Access (KASAN)": [
+        r"KASAN: slab-out-of-bounds",
+        r"KASAN: global-out-of-bounds",
+    ],
+    "Stack Overflow": [
+        r"stack overflow",
+        r"stack segment:",
+    ],
+    "Page Fault": [
+        r"unable to handle kernel paging request",
+        r"BUG: unable to handle page fault",
+    ],
+    "Soft Lockup": [
+        r"soft lockup",
+        r"BUG: soft lockup",
+    ],
+    "Hard Lockup": [
+        r"hard lockup",
+        r"BUG: hard lockup",
+    ],
+    "RCU Stall": [
+        r"rcu_sched.*stall",
+        r"rcu_bh.*stall",
+        r"INFO: rcu_sched self-detected stall",
+    ],
+    "Kernel Oops": [
+        r"Oops:",
+        r"unable to handle kernel",
+    ],
+    "Kernel Panic": [
+        r"Kernel panic - not syncing",
+        r"Kernel panic",
+    ],
+    "OOM (Out of Memory)": [
+        r"Out of memory",
+        r"oom-killer",
+        r"invoked oom-killer",
+    ],
+    "Deadlock (lockdep)": [
+        r"possible recursive locking",
+        r"circular locking dependency",
+        r"possible deadlock",
+    ],
+    "Division Error": [
+        r"divide error",
+        r"division by zero",
+    ],
+    "UBSAN Undefined Behavior": [
+        r"UBSAN:",
+    ],
+    "Bad Mode / Undefined Instruction": [
+        r"Bad mode",
+        r"undefined instruction",
+    ],
+    "Data Abort / Alignment Fault": [
+        r"alignment fault",
+        r"data abort",
+    ],
+}
+
+
+def extract_root_cause_evidence(
+    feature: CrashFeature,
+    result: RootCauseResult,
+) -> Dict[str, Any]:
+    """从分析结果中提取结构化证据
+
+    将分散在 CrashFeature 和 RootCauseResult 中的关键信号
+    整理为面向前端展示的 RootCauseEvidence 结构。
+
+    Args:
+        feature: 原始崩溃特征
+        result: 根因分析结果
+
+    Returns:
+        结构化证据 dict，可直接序列化为 RootCauseEvidence pydantic 模型
+    """
+    import re as _re
+
+    # ── 1. panic 关键词 ──────────────────────────
+    panic_keyword = None
+    if feature.panic_msg:
+        for label, patterns in _PANIC_KEYWORD_LABELS.items():
+            for pattern in patterns:
+                if _re.search(pattern, feature.panic_msg, _re.IGNORECASE):
+                    panic_keyword = label
+                    break
+            if panic_keyword:
+                break
+
+    # ── 2. 出错地址 ─────────────────────────────
+    fault_address = None
+    if feature.panic_msg:
+        addr_match = _re.search(
+            r'(?:at virtual address|address:)\s*([0-9a-fA-Fx]+)',
+            feature.panic_msg
+        )
+        if addr_match:
+            fault_address = addr_match.group(1)
+
+    # ── 3. 错误码 ───────────────────────────────
+    error_code = None
+    if feature.panic_msg:
+        err_match = _re.search(
+            r'(?:error_code\s*\(\s*0x[0-9a-fA-F]+\s*\)|#PF:.*?(?=\n|$))',
+            feature.panic_msg
+        )
+        if err_match:
+            error_code = err_match.group(0).strip()
+
+    # ── 4. 子系统 ───────────────────────────────
+    subsystem = feature.subsystem if feature.subsystem and feature.subsystem != "unknown" else None
+
+    # ── 5. 置信度 ───────────────────────────────
+    confidence = result.score
+
+    # ── 6. 匹配的专家规则 ───────────────────────
+    matched_rule_id = result.extra_info.get("rule_id")
+    matched_rule_name = None
+    if matched_rule_id:
+        rule_info = get_rule_by_id(matched_rule_id)
+        if rule_info:
+            matched_rule_name = rule_info["name"]
+
+    # ── 7. 调用栈关键函数 ──────────────────────
+    trace_functions = []
+    if feature.call_trace:
+        for frame in feature.call_trace[:5]:
+            trace_functions.append(str(frame))
+
+    # ── 8. 因果链 ──────────────────────────────
+    causal_chain = result.causal_chain if result.causal_chain else []
+
+    return {
+        "panic_keyword": panic_keyword,
+        "fault_address": fault_address,
+        "error_code": error_code,
+        "subsystem": subsystem,
+        "confidence": confidence,
+        "matched_rule_id": matched_rule_id,
+        "matched_rule_name": matched_rule_name,
+        "trace_functions": trace_functions,
+        "loaded_modules": feature.modules[:10] if feature.modules else [],
+        "kernel_version": feature.kernel_version or None,
+        "causal_chain": causal_chain,
+    }
+
+
 __all__ = [
     "RootCauseAnalyzer",
     "abstract_root_cause",
     "get_analyzer",
     "list_all_rules",
     "get_rule_by_id",
+    "extract_root_cause_evidence",
     "analyze_call_trace_structure",
     "infer_fix_patterns",
     "build_retrieval_query",

@@ -3,8 +3,18 @@
     <h2 class="page-title">宕机日志分析</h2>
     <p class="text-muted mb-4">提交 Linux 内核宕机日志 (dmesg/vmcore)，自动分析根因并匹配上游补丁</p>
 
-    <!-- 输入区域 -->
-    <el-card shadow="hover" class="input-card" v-if="!showResult">
+    <!-- ★ 输入区域 — 始终可见，有结果时折叠为紧凑栏 -->
+    <el-card shadow="hover" class="input-card">
+      <!-- 有结果时：折叠为紧凑操作栏 -->
+      <div v-if="showResult" class="compact-input-bar">
+        <span class="compact-input-hint">📝 输入新的宕机日志进行下一次分析</span>
+        <el-button type="primary" @click="resetForm" :icon="Plus">
+          新建分析
+        </el-button>
+      </div>
+
+      <!-- 无结果时：完整表单 -->
+      <template v-else>
       <el-form :model="form" :rules="rules" ref="formRef" label-position="top">
         <el-form-item label="日志内容" prop="log_content">
           <el-input
@@ -122,6 +132,7 @@ Call Trace:
           {{ example.label }}
         </el-tag>
       </div>
+      </template>
     </el-card>
 
     <!-- 结果展示区域 -->
@@ -201,6 +212,71 @@ Call Trace:
             </el-descriptions-item>
           </el-descriptions>
           <p class="mt-4">{{ currentTask.result.root_cause.summary }}</p>
+
+          <!-- ★ 根因证据 (Root Cause Evidence) — 可解释性增强 -->
+          <template v-if="currentTask.result.root_cause.evidence">
+            <el-divider />
+            <div class="evidence-section">
+              <div class="evidence-header">
+                <span>📋 根因证据 (Root Cause Evidence)</span>
+                <el-tag size="small" type="info" effect="plain">LLM 引用依据</el-tag>
+              </div>
+              <div class="evidence-grid">
+                <div class="evidence-item" v-if="currentTask.result.root_cause.evidence.panic_keyword">
+                  <el-icon color="#4caf50"><CircleCheck /></el-icon>
+                  <span class="evidence-label">panic_keyword:</span>
+                  <span class="evidence-value">{{ currentTask.result.root_cause.evidence.panic_keyword }}</span>
+                </div>
+                <div class="evidence-item" v-if="currentTask.result.root_cause.evidence.fault_address">
+                  <el-icon color="#4caf50"><CircleCheck /></el-icon>
+                  <span class="evidence-label">fault_address:</span>
+                  <code class="evidence-code">{{ currentTask.result.root_cause.evidence.fault_address }}</code>
+                </div>
+                <div class="evidence-item" v-if="currentTask.result.root_cause.evidence.error_code">
+                  <el-icon color="#4caf50"><CircleCheck /></el-icon>
+                  <span class="evidence-label">error_code:</span>
+                  <code class="evidence-code">{{ currentTask.result.root_cause.evidence.error_code }}</code>
+                </div>
+                <div class="evidence-item" v-if="currentTask.result.root_cause.evidence.subsystem">
+                  <el-icon color="#4caf50"><CircleCheck /></el-icon>
+                  <span class="evidence-label">subsystem:</span>
+                  <span class="evidence-value">{{ currentTask.result.root_cause.evidence.subsystem }}</span>
+                </div>
+                <div class="evidence-item">
+                  <el-icon color="#4caf50"><CircleCheck /></el-icon>
+                  <span class="evidence-label">confidence:</span>
+                  <el-progress
+                    :percentage="Math.round((currentTask.result.root_cause.evidence.confidence || 0) * 100)"
+                    :stroke-width="6" :color="'#4caf50'" style="width: 100px; display: inline-flex;"
+                  />
+                </div>
+                <div class="evidence-item" v-if="currentTask.result.root_cause.evidence.matched_rule_id">
+                  <el-icon color="#1976D2"><CircleCheck /></el-icon>
+                  <span class="evidence-label">matched_rule:</span>
+                  <el-tag size="small" type="primary">
+                    {{ currentTask.result.root_cause.evidence.matched_rule_id }}
+                  </el-tag>
+                  <span class="evidence-value ml-2" v-if="currentTask.result.root_cause.evidence.matched_rule_name">
+                    {{ currentTask.result.root_cause.evidence.matched_rule_name }}
+                  </span>
+                </div>
+                <div class="evidence-item"
+                     v-for="(func, idx) in (currentTask.result.root_cause.evidence.trace_functions || []).slice(0, 5)"
+                     :key="'tf-'+idx">
+                  <el-icon color="#ff9800"><CircleCheck /></el-icon>
+                  <span class="evidence-label">trace_function:</span>
+                  <code class="evidence-code">{{ func }}</code>
+                </div>
+              </div>
+
+              <!-- LLM 引用提示 -->
+              <el-alert type="info" :closable="false" class="mt-3" show-icon>
+                <template #title>
+                  依据以上 Evidence，进入 Patch 检索阶段
+                </template>
+              </el-alert>
+            </div>
+          </template>
         </el-card>
 
         <!-- 匹配补丁 -->
@@ -241,6 +317,41 @@ Call Trace:
                 <el-tag size="small" type="warning" v-if="patch.commit.bug_type && patch.commit.bug_type !== 'unknown'">{{ patch.commit.bug_type }}</el-tag>
               </div>
 
+              <!-- ═══ Zone 0: 为什么不是 #1 (Why-Not) ═══ -->
+              <el-alert
+                v-if="patch.rank >= 2 && patch.why_not_explanation"
+                type="warning"
+                :closable="false"
+                class="why-not-alert mb-3"
+              >
+                <template #title>
+                  💭 为什么不是 #1？
+                </template>
+                <template #default>
+                  <div class="why-not-content">
+                    <div v-if="patch.why_not_explanation.same_aspects?.length" class="mb-2">
+                      <span class="text-sm" style="color: #4caf50;">✓ 共同点：</span>
+                      <ul class="why-not-list same">
+                        <li v-for="(aspect, ai) in patch.why_not_explanation.same_aspects" :key="'same-'+ai">
+                          {{ aspect }}
+                        </li>
+                      </ul>
+                    </div>
+                    <div>
+                      <span class="text-sm" style="color: #f44336;">✗ 差异点：</span>
+                      <ul class="why-not-list different">
+                        <li v-for="(aspect, di) in patch.why_not_explanation.different_aspects" :key="'diff-'+di">
+                          {{ aspect }}
+                        </li>
+                      </ul>
+                    </div>
+                    <p class="text-sm text-muted mt-2" v-if="patch.why_not_explanation.ranking_reason">
+                      <strong>结论：</strong>{{ patch.why_not_explanation.ranking_reason }}
+                    </p>
+                  </div>
+                </template>
+              </el-alert>
+
               <!-- ═══ Zone 2: Matching Evidence 匹配依据 ═══ -->
               <div class="matching-evidence mt-3">
                 <div class="evidence-title">Matching Evidence</div>
@@ -279,6 +390,111 @@ Call Trace:
                 </div>
               </div>
 
+              <!-- ═══ Zone 3.5: 多维分数明细 (Score Breakdown) ═══ -->
+              <el-collapse class="mt-2" v-if="patch.score_breakdown">
+                <el-collapse-item title="📊 多维分数明细 (Score Breakdown)">
+                  <div class="score-breakdown">
+                    <div class="score-row" v-if="patch.score_breakdown.embedding_score !== undefined">
+                      <span class="score-label">Embedding 向量相似度</span>
+                      <el-progress
+                        :percentage="Math.round(patch.score_breakdown.embedding_score * 100)"
+                        :stroke-width="8" :color="scoreColor(patch.score_breakdown.embedding_score)"
+                        style="flex: 1; margin: 0 12px;"
+                      />
+                      <span class="score-pct">{{ (patch.score_breakdown.embedding_score * 100).toFixed(0) }}%</span>
+                    </div>
+                    <div class="score-row" v-if="patch.score_breakdown.reranker_score !== undefined">
+                      <span class="score-label">Reranker 语义重排</span>
+                      <el-progress
+                        :percentage="Math.round(patch.score_breakdown.reranker_score * 100)"
+                        :stroke-width="8" :color="scoreColor(patch.score_breakdown.reranker_score)"
+                        style="flex: 1; margin: 0 12px;"
+                      />
+                      <span class="score-pct">{{ (patch.score_breakdown.reranker_score * 100).toFixed(0) }}%</span>
+                    </div>
+                    <div class="score-row" v-if="patch.score_breakdown.expert_rule_score !== undefined">
+                      <span class="score-label">专家规则匹配</span>
+                      <el-progress
+                        :percentage="Math.round(patch.score_breakdown.expert_rule_score * 100)"
+                        :stroke-width="8" :color="scoreColor(patch.score_breakdown.expert_rule_score)"
+                        style="flex: 1; margin: 0 12px;"
+                      />
+                      <span class="score-pct">{{ (patch.score_breakdown.expert_rule_score * 100).toFixed(0) }}%</span>
+                    </div>
+                    <div class="score-row" v-if="patch.score_breakdown.callstack_match_score !== undefined">
+                      <span class="score-label">调用栈匹配</span>
+                      <el-progress
+                        :percentage="Math.round(patch.score_breakdown.callstack_match_score * 100)"
+                        :stroke-width="8" :color="scoreColor(patch.score_breakdown.callstack_match_score)"
+                        style="flex: 1; margin: 0 12px;"
+                      />
+                      <span class="score-pct">{{ (patch.score_breakdown.callstack_match_score * 100).toFixed(0) }}%</span>
+                    </div>
+                    <div class="score-row" v-if="patch.score_breakdown.subsystem_match_score !== undefined">
+                      <span class="score-label">子系统匹配</span>
+                      <el-progress
+                        :percentage="Math.round(patch.score_breakdown.subsystem_match_score * 100)"
+                        :stroke-width="8" :color="scoreColor(patch.score_breakdown.subsystem_match_score)"
+                        style="flex: 1; margin: 0 12px;"
+                      />
+                      <span class="score-pct">{{ (patch.score_breakdown.subsystem_match_score * 100).toFixed(0) }}%</span>
+                    </div>
+                    <div class="score-row" v-if="patch.score_breakdown.version_match_score !== undefined">
+                      <span class="score-label">版本匹配</span>
+                      <el-progress
+                        :percentage="Math.round(patch.score_breakdown.version_match_score * 100)"
+                        :stroke-width="8" :color="scoreColor(patch.score_breakdown.version_match_score)"
+                        style="flex: 1; margin: 0 12px;"
+                      />
+                      <span class="score-pct">{{ (patch.score_breakdown.version_match_score * 100).toFixed(0) }}%</span>
+                    </div>
+                    <div class="score-row" v-if="patch.score_breakdown.llm_judge_score !== undefined">
+                      <span class="score-label">LLM Judge 因果评分</span>
+                      <el-progress
+                        :percentage="Math.round(patch.score_breakdown.llm_judge_score * 100)"
+                        :stroke-width="8" :color="'#7c4dff'"
+                        style="flex: 1; margin: 0 12px;"
+                      />
+                      <span class="score-pct">{{ (patch.score_breakdown.llm_judge_score * 100).toFixed(0) }}%</span>
+                    </div>
+                  </div>
+                </el-collapse-item>
+              </el-collapse>
+
+              <!-- ═══ Zone 3.6: 版本感知分析 (Version Analysis) ═══ -->
+              <div class="version-analysis mt-2" v-if="patch.version_analysis?.crash_kernel_version || patch.version_analysis?.patch_kernel_version">
+                <el-divider />
+                <div class="version-header">
+                  <span>📊 版本分析 (Version-aware)</span>
+                </div>
+                <div class="version-grid">
+                  <div class="version-item" v-if="patch.version_analysis.crash_kernel_version">
+                    <span class="version-label">Crash Kernel:</span>
+                    <el-tag size="small" type="danger">{{ patch.version_analysis.crash_kernel_version }}</el-tag>
+                  </div>
+                  <div class="version-item" v-if="patch.version_analysis.patch_kernel_version">
+                    <span class="version-label">Patch Kernel:</span>
+                    <el-tag size="small" type="success">{{ patch.version_analysis.patch_kernel_version }}</el-tag>
+                  </div>
+                  <div class="version-item" v-if="patch.version_analysis.version_distance">
+                    <span class="version-label">版本距离:</span>
+                    <span class="version-value">{{ patch.version_analysis.version_distance }}</span>
+                  </div>
+                  <div class="version-item" v-if="patch.version_analysis.compatibility">
+                    <span class="version-label">版本兼容:</span>
+                    <el-tag
+                      size="small"
+                      :type="compatibilityTagType(patch.version_analysis.compatibility)"
+                    >
+                      {{ patch.version_analysis.compatibility }}
+                    </el-tag>
+                  </div>
+                </div>
+                <p class="text-sm text-muted mt-2" v-if="patch.version_analysis.compatibility_reason">
+                  {{ patch.version_analysis.compatibility_reason }}
+                </p>
+              </div>
+
               <!-- ═══ Zone 4: Commit Message (默认展开3行) ═══ -->
               <div class="commit-message-block mt-3" v-if="patch.commit.message">
                 <div class="message-preview" :class="{ expanded: patch._msgExpanded }">
@@ -304,6 +520,16 @@ Call Trace:
 
           <el-empty v-if="!currentTask.result.matched_patches?.length" description="未找到匹配的补丁" />
         </el-card>
+
+        <!-- ★ 结果底部操作按钮 -->
+        <div class="result-actions mt-4" style="text-align: center; padding: 20px 0;">
+          <el-button type="primary" size="large" :icon="Plus" @click="resetForm">
+            开始新分析
+          </el-button>
+          <el-button size="large" @click="$router.push('/history')" :icon="Clock">
+            查看历史记录
+          </el-button>
+        </div>
 
         <!-- Mock 模式警告 -->
         <el-alert
@@ -369,6 +595,7 @@ Call Trace:
         >
           <template #extra>
             <el-button type="primary" @click="retryAnalysis">重试分析</el-button>
+            <el-button @click="resetForm">新建分析</el-button>
           </template>
         </el-result>
       </el-card>
@@ -377,7 +604,7 @@ Call Trace:
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAnalysisStore } from '@/stores/analysis'
@@ -522,13 +749,33 @@ async function submitAnalysis() {
 }
 
 function resetForm() {
-  formRef.value?.resetFields()
+  // ★ 显式重置 reactive 表单数据（必须在 currentTaskId 清空之前）
+  // 原因：表单被 v-if 销毁后 formRef 为 null，resetFields() 无法执行；
+  //       且 el-form 的 resetFields 重置到"挂载时快照"而非代码默认值
+  form.log_content = ''
+  form.log_type = 'dmesg'
+  form.kernel_version = ''
+  form.top_k = 5
+  form.enable_llm_explanation = true
+  form.llm_mode = 'free'
+  form.user_api_key = ''
+  form.user_api_base = ''
+  form.user_api_model = ''
+
+  // 清空任务状态（触发 showResult=false，表单重新渲染）
   analysisStore.currentTaskId = null
+
+  // 清除 URL 参数（防止刷新后恢复旧任务）
   router.replace('/analyze')
+
+  // 等待表单重新挂载后清除验证状态
+  nextTick(() => {
+    formRef.value?.resetFields()
+  })
 }
 
 function retryAnalysis() {
-  analysisStore.currentTaskId = null
+  resetForm()
 }
 
 function copyText(text) {
@@ -541,6 +788,27 @@ function rankColor(rank) {
   return colors[rank - 1] || '#78909c'
 }
 
+/**
+ * 根据分数返回进度条颜色
+ * @param {number} score - 0.0 ~ 1.0
+ * @returns {string} 颜色 hex 值
+ */
+function scoreColor(score) {
+  if (score >= 0.85) return '#4caf50'
+  if (score >= 0.70) return '#8bc34a'
+  if (score >= 0.55) return '#ff9800'
+  if (score >= 0.40) return '#ff5722'
+  return '#f44336'
+}
+
+/**
+ * 版本兼容性对应的 Element Plus Tag 类型
+ */
+function compatibilityTagType(compatibility) {
+  const map = { 'High': 'success', 'Medium': 'warning', 'Low': 'danger', 'Unknown': 'info' }
+  return map[compatibility] || 'info'
+}
+
 // ── 从 URL 恢复任务 ────────────────────────────
 onMounted(() => {
   const taskId = route.query.task
@@ -550,6 +818,10 @@ onMounted(() => {
     if (analysisStore.tasks[taskId].status === 'running') {
       analysisStore.startPolling(taskId)
     }
+  } else if (!taskId) {
+    // ★ 防护：URL 无 task 参数时强制回到输入模式
+    // 防止 store 持久化恢复的陈旧 currentTaskId 导致表单不显示
+    analysisStore.currentTaskId = null
   }
 })
 
@@ -559,6 +831,9 @@ watch(() => route.query.task, (taskId) => {
     if (analysisStore.tasks[taskId].status === 'running') {
       analysisStore.startPolling(taskId)
     }
+  } else if (!taskId) {
+    // ★ URL 中 task 参数被清除后，自动回到输入模式
+    analysisStore.currentTaskId = null
   }
 })
 </script>
@@ -574,6 +849,20 @@ watch(() => route.query.task, (taskId) => {
 }
 
 .input-card { margin-bottom: 24px; }
+
+/* ── 紧凑输入栏 (有结果时显示) ──────────────── */
+.compact-input-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  gap: 16px;
+}
+.compact-input-hint {
+  font-size: 14px;
+  color: var(--color-text-muted);
+  flex: 1;
+}
 
 /* ── 结果操作栏 ────────────────────────────────── */
 .result-toolbar {
@@ -784,5 +1073,129 @@ watch(() => route.query.task, (taskId) => {
 .strategy-item {
   display: flex;
   align-items: center;
+}
+
+/* ── Root Cause Evidence ──────────────────────── */
+.evidence-section {
+  background: rgba(25, 118, 210, 0.03);
+  border: 1px solid rgba(25, 118, 210, 0.10);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+.evidence-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-primary-dark, #1565C0);
+  margin-bottom: 12px;
+}
+.evidence-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.evidence-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.evidence-label {
+  font-weight: 500;
+  color: var(--color-text-muted, #78909c);
+  min-width: 110px;
+}
+.evidence-value {
+  color: var(--color-text);
+}
+.evidence-code {
+  background: #f0f4f8;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: monospace;
+  color: #e53935;
+}
+
+/* ── Why-Not Alert ────────────────────────────── */
+.why-not-alert {
+  background: rgba(255, 152, 0, 0.04) !important;
+  border-color: rgba(255, 152, 0, 0.15) !important;
+}
+.why-not-list {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+.why-not-list li {
+  font-size: 12px;
+  line-height: 1.7;
+}
+.why-not-list.same li { color: #2e7d32; }
+.why-not-list.different li { color: #c62828; }
+
+/* ── Score Breakdown ──────────────────────────── */
+.score-breakdown {
+  padding: 8px 0;
+}
+.score-row {
+  display: flex;
+  align-items: center;
+  padding: 6px 0;
+}
+.score-row .score-label {
+  width: 140px;
+  font-size: 12px;
+  color: var(--color-text-muted, #78909c);
+  flex-shrink: 0;
+}
+.score-pct {
+  width: 40px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* ── Version Analysis ─────────────────────────── */
+.version-analysis {
+  background: rgba(76, 175, 80, 0.03);
+  border: 1px solid rgba(76, 175, 80, 0.10);
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+.version-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: #2e7d32;
+  margin-bottom: 10px;
+}
+.version-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+}
+.version-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.version-label {
+  font-weight: 500;
+  color: var(--color-text-muted, #78909c);
+}
+.version-value {
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+/* ── Result Actions ──────────────────────────── */
+.result-actions {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
 }
 </style>

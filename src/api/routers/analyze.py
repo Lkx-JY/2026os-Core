@@ -15,6 +15,10 @@ from ..schemas.entities import (
     MatchedPatch,
     CommitInfo,
     AnalysisStep,
+    ScoreBreakdown,
+    RootCauseEvidence,
+    VersionAnalysis,
+    WhyNotExplanation,
 )
 from ..dependencies import get_config, check_index_ready, verify_api_key
 from ..storage import get_task_store, RedisTaskStore
@@ -160,6 +164,13 @@ async def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
                 confidence=0.92,
                 summary="链表并发操作导致的竞态条件问题，可能涉及 list_del/list_add 时的锁保护缺失",
                 key_symptoms=["list_del corruption", "list corruption"],
+                evidence=RootCauseEvidence(
+                    panic_keyword="List Corruption", fault_address="ffff8800a1b2c3d4",
+                    subsystem="list", confidence=0.92,
+                    matched_rule_id="R007", matched_rule_name="Memory Corruption (List)",
+                    trace_functions=["__list_del_entry_valid+0x89/0xa0", "__slab_free+0xab/0x2c0"],
+                    causal_chain=["Expert Rule: R007", "Affected Subsystem: list"],
+                ),
             )
         elif "soft lockup" in log_lower:
             root_cause = RootCauseInfo(
@@ -168,6 +179,12 @@ async def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
                 confidence=0.88,
                 summary="CPU 软锁定，某个 CPU 在内核态执行时间过长未调度",
                 key_symptoms=["soft lockup", "CPU stuck"],
+                evidence=RootCauseEvidence(
+                    panic_keyword="Soft Lockup", subsystem="scheduler", confidence=0.88,
+                    matched_rule_id="R011", matched_rule_name="Soft Lockup",
+                    trace_functions=["watchdog_timer_fn+0x1a5/0x1d0", "__hrtimer_run_queues+0x10a/0x180"],
+                    causal_chain=["Expert Rule: R011", "Affected Subsystem: scheduler"],
+                ),
             )
         elif "use-after-free" in log_lower or "uaf" in log_lower:
             root_cause = RootCauseInfo(
@@ -176,6 +193,13 @@ async def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
                 confidence=0.85,
                 summary="释放后使用 (UAF) 漏洞，对象被释放后仍被引用",
                 key_symptoms=["use-after-free", "freed memory accessed"],
+                evidence=RootCauseEvidence(
+                    panic_keyword="Use-After-Free (KASAN)", fault_address="ffff880123456789",
+                    subsystem="mm", confidence=0.85,
+                    matched_rule_id="R003", matched_rule_name="Use After Free (KASAN)",
+                    trace_functions=["kmem_cache_alloc+0x5f/0x170", "kasan_report+0x8e/0xb0"],
+                    causal_chain=["Expert Rule: R003", "Knowledge Base: UAF pattern matched"],
+                ),
             )
         elif "null pointer" in log_lower or "NULL pointer" in log_lower:
             root_cause = RootCauseInfo(
@@ -184,6 +208,13 @@ async def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
                 confidence=0.90,
                 summary="空指针解引用，未做有效性检查即访问指针成员",
                 key_symptoms=["NULL pointer dereference", "unable to handle kernel NULL pointer"],
+                evidence=RootCauseEvidence(
+                    panic_keyword="NULL pointer dereference", fault_address="0000000000000028",
+                    subsystem="kernel", confidence=0.90,
+                    matched_rule_id="R002", matched_rule_name="Null Pointer Dereference",
+                    trace_functions=["my_function+0x123/0x456", "my_other_function+0xab/0xcd"],
+                    causal_chain=["Expert Rule: R002 (Null Pointer)", "Severity: HIGH"],
+                ),
             )
         elif "page fault" in log_lower or "BUG:" in log_lower:
             root_cause = RootCauseInfo(
@@ -307,9 +338,13 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
         ))
         _save_task(task_id, {"progress": 0.15, "steps": steps})
 
-        from ...analyzer.rootcause import get_analyzer
+        from ...analyzer.rootcause import get_analyzer, extract_root_cause_evidence
         analyzer = get_analyzer()
         root_cause_result = analyzer.analyze(feature)
+
+        # ★ 提取根因证据 (可解释性增强)
+        evidence_dict = extract_root_cause_evidence(feature, root_cause_result)
+        root_cause_evidence = RootCauseEvidence(**evidence_dict) if evidence_dict else None
 
         root_cause_info = RootCauseInfo(
             root_cause=root_cause_result.root_cause,
@@ -317,6 +352,7 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
             confidence=round(root_cause_result.score, 2),
             summary=root_cause_result.reason,
             key_symptoms=root_cause_result.causal_chain or [],
+            evidence=root_cause_evidence,  # ★ 挂载证据
         )
 
         steps[-1].status = "completed"
@@ -350,30 +386,81 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
 
         matched_patches = []
         if diagnosis.retrieval_result:
+            # ★ 导入可解释性增强模块
+            from ...retriever.rerank import (
+                compute_score_breakdown,
+                generate_why_not_explanations,
+            )
+            from ...retriever.filter import compute_version_analysis
+
+            # ★ 先构造 matched_patches (不含增强字段)
+            temp_patches = []
             for item in diagnosis.retrieval_result.top(request.top_k):
                 meta = item.metadata or {}
-
-                # 构建 diff 预览: raw diff 未存储, 从已有元数据合成
                 diff_preview = _build_diff_preview(meta)
 
-                matched_patches.append(MatchedPatch(
-                    rank=item.rank,
-                    commit=CommitInfo(
-                        commit_id=item.commit_hash,
-                        title=item.subject,
-                        message=item.metadata.get("body", "")[:500] if item.metadata else "",
-                        author=item.metadata.get("author", "") if item.metadata else "",
-                        date=item.metadata.get("date", "") if item.metadata else "",
-                        subsystem=item.subsystem,
-                        bug_type=item.bug_type,
-                        files_changed=item.metadata.get("files_changed", []) if item.metadata else [],
-                        diff_preview=diff_preview,
+                temp_patches.append({
+                    "item": item,
+                    "patch": MatchedPatch(
+                        rank=item.rank,
+                        commit=CommitInfo(
+                            commit_id=item.commit_hash,
+                            title=item.subject,
+                            message=item.metadata.get("body", "")[:500] if item.metadata else "",
+                            author=item.metadata.get("author", "") if item.metadata else "",
+                            date=item.metadata.get("date", "") if item.metadata else "",
+                            subsystem=item.subsystem,
+                            bug_type=item.bug_type,
+                            files_changed=item.metadata.get("files_changed", []) if item.metadata else [],
+                            diff_preview=diff_preview,
+                        ),
+                        relevance_score=round(item.final_score, 3),
+                        recall_score=round(item.vector_score, 3),
+                        rerank_score=round(item.reranker_score, 3),
+                        match_reason=item.rank_reason,
                     ),
-                    relevance_score=round(item.final_score, 3),
-                    recall_score=round(item.vector_score, 3),
-                    rerank_score=round(item.reranker_score, 3),
-                    match_reason=item.rank_reason,
-                ))
+                })
+
+            # ★ 为每个补丁计算 ScoreBreakdown
+            crash_kv = getattr(feature, "kernel_version", "") or ""
+            crash_subsystem = getattr(feature, "subsystem", "unknown")
+            crash_call_trace = getattr(feature, "call_trace", []) or []
+            crash_bug_type = root_cause_result.bug_type
+            rule_id = root_cause_result.extra_info.get("rule_id", "")
+
+            for tp in temp_patches:
+                item = tp["item"]
+                meta = item.metadata or {}
+
+                # ScoreBreakdown
+                breakdown_dict = compute_score_breakdown(
+                    item,
+                    crash_subsystem=crash_subsystem,
+                    crash_call_trace=crash_call_trace,
+                    crash_kernel_version=crash_kv,
+                    crash_bug_type=crash_bug_type,
+                    rule_id=rule_id,
+                )
+                tp["patch"].score_breakdown = ScoreBreakdown(**breakdown_dict)
+
+                # VersionAnalysis
+                version_dict = compute_version_analysis(
+                    crash_kernel_version=crash_kv,
+                    patch_commit_info=meta,
+                    patch_date=meta.get("date", ""),
+                )
+                if version_dict.get("crash_kernel_version") or version_dict.get("patch_kernel_version"):
+                    tp["patch"].version_analysis = VersionAnalysis(**version_dict)
+
+            # ★ 生成 "为什么不是其他补丁" 解释
+            ranked_items_for_explain = [tp["item"] for tp in temp_patches]
+            why_not_list = generate_why_not_explanations(ranked_items_for_explain)
+
+            for i, tp in enumerate(temp_patches):
+                if i > 0 and i < len(why_not_list) and why_not_list[i]:
+                    tp["patch"].why_not_explanation = WhyNotExplanation(**why_not_list[i])
+
+            matched_patches = [tp["patch"] for tp in temp_patches]
 
         steps[-1].status = "completed"
         steps[-1].completed_at = datetime.now(timezone.utc)
@@ -576,38 +663,103 @@ def _generate_real_explanation(root_cause: RootCauseInfo, patches: list[MatchedP
 
 
 def _get_mock_patches(top_k: int, root_cause: RootCauseInfo) -> list[MatchedPatch]:
-    """生成模拟匹配补丁 (实际部署时替换为真实 RAG 结果)"""
+    """生成模拟匹配补丁 (包含可解释性增强字段)"""
     mock_commits = {
         "race_condition": [
-            ("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f67890", "list: fix race condition in list_del", "修复 list_del 操作的竞态条件，添加适当的 spin_lock 保护", "spin_lock_irqsave"),
-            ("b2c3d4e5f6a7b2c3d4e5f6a7b2c3d4e5f6789012", "locking: add missing lock in list manipulation", "在链表操作路径添加缺失的 mutex_lock", "mutex_lock"),
-            ("c3d4e5f6a7b8c3d4e5f6a7b8c3d4e5f67890123", "rcu: fix RCU stall in list traversal", "修复遍历链表时的 RCU 停滞问题", "rcu_read_lock"),
+            ("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f67890", "list: fix race condition in list_del",
+             "修复 list_del 操作的竞态条件，添加适当的 spin_lock 保护", "spin_lock_irqsave",
+             "kernel", "race_condition", ["kernel/locking.c", "include/linux/list.h"]),
+            ("b2c3d4e5f6a7b2c3d4e5f6a7b2c3d4e5f6789012", "locking: add missing lock in list manipulation",
+             "在链表操作路径添加缺失的 mutex_lock", "mutex_lock",
+             "kernel", "race_condition", ["kernel/locking.c"]),
+            ("c3d4e5f6a7b8c3d4e5f6a7b8c3d4e5f67890123", "rcu: fix RCU stall in list traversal",
+             "修复遍历链表时的 RCU 停滞问题", "rcu_read_lock",
+             "rcu", "hang", ["kernel/rcu/tree.c"]),
         ],
         "soft_lockup": [
-            ("d4e5f6a7b8c9d4e5f6a7b8c9d4e5f678901234", "sched: fix soft lockup in scheduler", "修复调度器中的软锁定问题，增加调度点", "schedule"),
-            ("e5f6a7b8c9d0e5f6a7b8c9d0e5f6789012345", "rcu: resolve RCU soft lockup", "解决长时间 RCU 读锁导致的软锁定", "rcu_read_unlock"),
+            ("d4e5f6a7b8c9d4e5f6a7b8c9d4e5f678901234", "sched: fix soft lockup in scheduler",
+             "修复调度器中的软锁定问题，增加调度点", "schedule",
+             "kernel", "hang", ["kernel/sched/core.c"]),
+            ("e5f6a7b8c9d0e5f6a7b8c9d0e5f6789012345", "rcu: resolve RCU soft lockup",
+             "解决长时间 RCU 读锁导致的软锁定", "rcu_read_unlock",
+             "rcu", "hang", ["kernel/rcu/update.c"]),
         ],
         "use_after_free": [
-            ("f6a7b8c9d0e1f6a7b8c9d0e1f6a78901234567", "mm: fix use-after-free in kfree_rcu", "修复 kfree_rcu 中的 UAF 漏洞", "kfree_rcu"),
-            ("a7b8c9d0e1f2a7b8c9d0e1f2a789012345678", "slab: fix use-after-free in kmem_cache_free", "修复 slab 分配器中的释放后使用", "kmem_cache_free"),
+            ("f6a7b8c9d0e1f6a7b8c9d0e1f6a78901234567", "mm: fix use-after-free in kfree_rcu",
+             "修复 kfree_rcu 中的 UAF 漏洞", "kfree_rcu",
+             "mm", "use_after_free", ["mm/slab_common.c", "kernel/rcu/tree.c"]),
+            ("a7b8c9d0e1f2a7b8c9d0e1f2a789012345678", "slab: fix use-after-free in kmem_cache_free",
+             "修复 slab 分配器中的释放后使用", "kmem_cache_free",
+             "mm", "use_after_free", ["mm/slub.c"]),
         ],
         "null_pointer_dereference": [
-            ("b8c9d0e1f2a3b8c9d0e1f2a3b890123456789", "net: add NULL check in netdev_rx_handler", "在网络设备接收处添加空指针检查", "NULL"),
-            ("c9d0e1f2a3b4c9d0e1f2a3b4c901234567890", "fs: fix NULL pointer dereference in vfs_read", "修复 vfs_read 路径的空指针解引用", "NULL pointer"),
+            ("b8c9d0e1f2a3b8c9d0e1f2a3b890123456789", "net: add NULL check in netdev_rx_handler",
+             "在网络设备接收处理函数中添加空指针检查，防止因未初始化的 net_device 导致的崩溃", "NULL",
+             "net", "null_pointer", ["net/core/dev.c", "drivers/net/ethernet/intel/e1000.c"]),
+            ("c9d0e1f2a3b4c9d0e1f2a3b4c901234567890", "fs: fix NULL pointer dereference in vfs_read",
+             "修复 vfs_read 路径中 file->f_op 未检查导致的空指针解引用", "NULL pointer",
+             "fs", "null_pointer", ["fs/read_write.c"]),
         ],
         "memory_corruption": [
-            ("d0e1f2a3b4c5d0e1f2a3b4c5d01234567890a", "mm/slub: fix slab corruption", "修复 SLUB 分配器的 slab 腐败问题", "slab"),
-            ("e1f2a3b4c5d6e1f2a3b4c5d6e1234567890ab", "mm: fix page corruption in swap", "修复 swap 页面腐败", "swap"),
+            ("d0e1f2a3b4c5d0e1f2a3b4c5d01234567890a", "mm/slub: fix slab corruption in double free",
+             "修复 SLUB 分配器因并发双重释放导致的 slab 腐败问题", "slab",
+             "mm", "memory_corruption", ["mm/slub.c"]),
+            ("e1f2a3b4c5d6e1f2a3b4c5d6e1234567890ab", "mm: fix page corruption in swap",
+             "修复 swap 换出路径的页面腐败", "swap",
+             "mm", "memory_corruption", ["mm/swapfile.c"]),
         ],
         "unknown": [
-            ("f2a3b4c5d6e7f2a3b4c5d6e7f234567890abc", "kernel: fix general protection fault", "修复通用保护错误", "general protection"),
-            ("a3b4c5d6e7f8a3b4c5d6e7f8a34567890abcd", "x86: fix kernel crash in interrupt handler", "修复中断处理程序中的内核崩溃", "interrupt"),
+            ("f2a3b4c5d6e7f2a3b4c5d6e7f234567890abc", "kernel: fix general protection fault",
+             "修复通用保护错误", "general protection",
+             "kernel", "crash", ["kernel/irq/handle.c"]),
+            ("a3b4c5d6e7f8a3b4c5d6e7f8a34567890abcd", "x86: fix kernel crash in interrupt handler",
+             "修复中断处理程序中的内核崩溃", "interrupt",
+             "arch", "crash", ["arch/x86/kernel/irq.c"]),
         ],
     }
 
     patches = mock_commits.get(root_cause.root_cause, mock_commits["unknown"])
     results = []
-    for i, (commit_id, title, message, highlight) in enumerate(patches[:top_k]):
+    for i, (commit_id, title, message, highlight, subsystem, bug_type, files) in enumerate(patches[:top_k]):
+        # ScoreBreakdown — 模拟多维分数
+        sb = ScoreBreakdown(
+            embedding_score=round(0.88 - i * 0.06, 4),
+            reranker_score=round(0.92 - i * 0.06, 4),
+            expert_rule_score=round(0.95 - i * 0.10, 4),
+            callstack_match_score=round(0.90 - i * 0.20, 4),
+            subsystem_match_score=round(1.0 - i * 0.15, 4),
+            version_match_score=round(0.85 - i * 0.05, 4),
+            llm_judge_score=round(0.88 - i * 0.08, 4),
+            final_score=round(0.95 - i * 0.08, 4),
+        )
+
+        # VersionAnalysis — 模拟版本对比
+        va = VersionAnalysis(
+            crash_kernel_version="6.6.0",
+            patch_kernel_version="6.4.0" if i < 1 else "6.1.0",
+            version_distance="2 Minor Release" if i < 1 else "5 Minor Release",
+            distance_value=2 if i < 1 else 5,
+            compatibility="High" if i < 1 else "Medium",
+            compatibility_reason="补丁版本略新于崩溃内核，大概率可直接 backport"
+            if i < 1 else "版本差距较大，需确认补丁依赖的 API 在目标内核中仍存在",
+            patch_release_date="2024-03-15",
+            crash_release_date="2024-05-20",
+        )
+
+        # WhyNotExplanation — 为非 Top-1 生成对比解释
+        wn = None
+        if i > 0:
+            wn = WhyNotExplanation(
+                compared_to_rank=1,
+                same_aspects=[f"同属于 {bug_type} 修复", f"同一子系统 {subsystem}"],
+                different_aspects=[
+                    f"补丁修改文件集中在 {files[0].split('/')[0]} 子目录，与崩溃调用栈关联度较低",
+                    f"补丁对应的内核版本较旧，存在兼容性差异",
+                    f"Reranker 语义重排分数低于 Top-1 ({sb.reranker_score} vs {0.92})",
+                ],
+                ranking_reason=f"综合 {3} 个差异因素，排名第 {i + 1}",
+            )
+
         results.append(MatchedPatch(
             rank=i + 1,
             commit=CommitInfo(
@@ -616,9 +768,9 @@ def _get_mock_patches(top_k: int, root_cause: RootCauseInfo) -> list[MatchedPatc
                 message=message,
                 author="Linus Torvalds",
                 date="2025-08-15",
-                subsystem=root_cause.subsystem,
-                bug_type=root_cause.root_cause,
-                files_changed=[f"{root_cause.subsystem}/core.c"],
+                subsystem=subsystem,
+                bug_type=bug_type,
+                files_changed=files,
                 diff_preview=f"+ {highlight}(&lock);\n- old_func(&data);\n+ new_safe_func(&data);",
             ),
             relevance_score=round(0.95 - i * 0.08, 2),
@@ -626,6 +778,9 @@ def _get_mock_patches(top_k: int, root_cause: RootCauseInfo) -> list[MatchedPatc
             rerank_score=round(0.92 - i * 0.06, 2),
             match_reason=f"该补丁通过 {highlight} 操作修复了与当前崩溃日志匹配的 {root_cause.root_cause} 问题",
             diff_highlights=[f"+ {highlight}()"],
+            score_breakdown=sb,
+            version_analysis=va,
+            why_not_explanation=wn,
         ))
     return results
 

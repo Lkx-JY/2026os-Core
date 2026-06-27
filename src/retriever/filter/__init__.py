@@ -699,6 +699,116 @@ def build_milvus_filter_expr(
     return " && ".join(parts)
 
 
+# ============================================================================
+# ★ 可解释性增强 — 版本感知分析
+# ============================================================================
+
+def compute_version_analysis(
+    crash_kernel_version: str,
+    patch_commit_info: Dict[str, Any],
+    patch_date: str = "",
+) -> Dict[str, Any]:
+    """计算版本感知分析
+
+    将补丁版本与崩溃内核版本进行对比，生成面向前端 VersionAnalysis 面板的 dict。
+
+    Args:
+        crash_kernel_version: 崩溃内核版本，如 "6.6.0"
+        patch_commit_info: 补丁的 commit dict，至少包含:
+            kernel_version_major, kernel_version_minor, kernel_version
+        patch_date: 补丁提交日期 (YYYY-MM-DD)
+
+    Returns:
+        Dict 可直接序列化为 VersionAnalysis pydantic 模型
+    """
+    # ── 1. 解析补丁内核版本 ────────────────────
+    patch_major = patch_commit_info.get("kernel_version_major")
+    patch_minor = patch_commit_info.get("kernel_version_minor")
+
+    if patch_major is None or patch_minor is None:
+        # 回退：从 kernel_version 字符串解析
+        kv = patch_commit_info.get("kernel_version", "")
+        if kv:
+            kv_parts = kv.split(".")
+            try:
+                patch_major = int(kv_parts[0])
+                patch_minor = int(kv_parts[1]) if len(kv_parts) > 1 else 0
+            except (ValueError, IndexError):
+                pass
+
+    # ── 2. 解析崩溃内核版本 ────────────────────
+    crash_major = 0
+    crash_minor = 0
+    if crash_kernel_version:
+        crash_parts = crash_kernel_version.split(".")
+        try:
+            crash_major = int(crash_parts[0])
+            crash_minor = int(crash_parts[1]) if len(crash_parts) > 1 else 0
+        except (ValueError, IndexError):
+            pass
+
+    # ── 3. 计算距离 ────────────────────────────
+    if patch_major is None or patch_minor is None:
+        version_distance = "Unknown"
+        compatibility = "Unknown"
+        compatibility_reason = "补丁版本信息缺失，无法评估兼容性"
+        distance_value = 0
+    else:
+        distance = (patch_major - crash_major) * 1000 + (patch_minor - crash_minor)
+
+        if distance == 0:
+            version_distance = "Same Version"
+            compatibility = "High"
+            compatibility_reason = "补丁与崩溃内核版本一致，直接适用"
+            distance_value = 0
+        elif 1 <= distance <= 2:
+            version_distance = f"{distance} Minor Release"
+            compatibility = "High"
+            compatibility_reason = "补丁版本略新于崩溃内核，大概率可直接 backport"
+            distance_value = distance
+        elif 3 <= distance <= 5:
+            version_distance = f"{distance} Minor Release"
+            compatibility = "Medium"
+            compatibility_reason = "版本差距较大，需确认补丁依赖的 API 在目标内核中仍存在"
+            distance_value = distance
+        elif distance > 5:
+            version_distance = f"{distance} Minor Release (Cross Minor)"
+            compatibility = "Low"
+            compatibility_reason = "跨多个 minor release，补丁依赖的内核基础设施可能已变更，需人工审查"
+            distance_value = distance
+        elif distance < 0:
+            version_distance = f"{abs(distance)} Minor Release Behind"
+            compatibility = "Medium"
+            compatibility_reason = "补丁版本比崩溃内核旧，可能是修复的原始提交，需确认后续是否有补充修复"
+            distance_value = abs(distance)
+        else:
+            version_distance = "Unknown"
+            compatibility = "Unknown"
+            compatibility_reason = "无法确定版本关系"
+            distance_value = 0
+
+    # ── 4. 获取崩溃内核发布日期 ────────────────
+    crash_date = None
+    if crash_major > 0:
+        for (maj, min_), rel_date in _KERNEL_RELEASE_DATES.items():
+            if maj == crash_major and min_ == crash_minor:
+                crash_date = rel_date
+                break
+
+    patch_ver_str = f"{patch_major}.{patch_minor}.0" if patch_major is not None else None
+
+    return {
+        "crash_kernel_version": crash_kernel_version or None,
+        "patch_kernel_version": patch_ver_str,
+        "version_distance": version_distance,
+        "distance_value": distance_value,
+        "compatibility": compatibility,
+        "compatibility_reason": compatibility_reason,
+        "patch_release_date": patch_date or None,
+        "crash_release_date": crash_date,
+    }
+
+
 __all__ = [
     # 数据结构
     "FilterResult",
@@ -715,6 +825,8 @@ __all__ = [
     "apply_filters",
     # 工具
     "build_milvus_filter_expr",
+    # ★ 可解释性增强
+    "compute_version_analysis",
     # 常量
     "SUBSYSTEM_PATH_MAP",
     "SUBSYSTEM_HIERARCHY",

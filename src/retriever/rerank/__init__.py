@@ -614,6 +614,332 @@ def _generate_rank_reason(
     return "; ".join(parts)
 
 
+# ============================================================================
+# ★ 可解释性增强 — 多维评分明细 & 比较解释
+# ============================================================================
+
+# 多维融合权重 (可配置)
+EXPLAINABLE_FUSION_WEIGHTS = {
+    "embedding": 0.15,
+    "reranker": 0.25,
+    "expert_rule": 0.15,
+    "callstack_match": 0.10,
+    "subsystem_match": 0.10,
+    "version_match": 0.10,
+    "llm_judge": 0.15,
+}
+
+# 子系统层级和关联关系 (从 filter 模块共享)
+_SUBSYSTEM_HIERARCHY: Dict[str, List[str]] = {
+    "kernel": ["rcu", "cgroup", "bpf", "irq"],
+    "drivers": ["usb", "pci", "nvme", "scsi"],
+    "fs": ["nfs"],
+    "arch": ["kvm"],
+}
+
+_RELATED_SUBSYSTEMS: Dict[str, List[str]] = {
+    "mm": ["fs", "block", "kernel"],
+    "net": ["drivers", "kernel", "bpf"],
+    "fs": ["mm", "block", "kernel", "nfs"],
+    "block": ["mm", "fs", "drivers", "scsi", "nvme"],
+    "deadlock": ["kernel", "mm", "fs", "net", "block"],
+}
+
+
+def compute_score_breakdown(
+    item: RankedItem,
+    crash_subsystem: str = "",
+    crash_call_trace: Optional[List[str]] = None,
+    crash_kernel_version: str = "",
+    crash_bug_type: str = "",
+    rule_id: str = "",
+) -> Dict[str, Any]:
+    """计算多维评分明细
+
+    将综合分数 final_score 分解为 7 个独立评分维度，
+    面向前端 ScoreBreakdown 面板。
+
+    Args:
+        item: 排序后的候选补丁
+        crash_subsystem: 崩溃所属子系统
+        crash_call_trace: 崩溃调用栈函数列表
+        crash_kernel_version: 崩溃内核版本
+        crash_bug_type: 崩溃的 Bug 类型
+        rule_id: 匹配的专家规则 ID
+
+    Returns:
+        Dict 可直接序列化为 ScoreBreakdown pydantic 模型
+    """
+
+    # ── 1. 专家规则匹配度 ────────────────────
+    expert_rule_score = _compute_expert_rule_score(
+        item.bug_type, crash_bug_type, rule_id
+    )
+
+    # ── 2. 调用栈匹配度 ──────────────────────
+    callstack_match_score = _compute_callstack_match_score(
+        item.metadata, crash_call_trace or [], crash_subsystem
+    )
+
+    # ── 3. 子系统匹配度 ──────────────────────
+    subsystem_match_score = _compute_subsystem_match_score(
+        item.subsystem, crash_subsystem
+    )
+
+    # ── 4. 版本匹配度 (从 metadata 中获取) ──
+    version_match_score = item.metadata.get("_version_weight", 1.0)
+
+    # ── 5. 综合分数 ──────────────────────────
+    W = EXPLAINABLE_FUSION_WEIGHTS
+    final = (
+        item.vector_score * W["embedding"]
+        + item.reranker_score * W["reranker"]
+        + expert_rule_score * W["expert_rule"]
+        + callstack_match_score * W["callstack_match"]
+        + subsystem_match_score * W["subsystem_match"]
+        + version_match_score * W["version_match"]
+        + item.llm_judge_score * W["llm_judge"]
+    )
+
+    return {
+        "embedding_score": round(item.vector_score, 4),
+        "reranker_score": round(item.reranker_score, 4),
+        "expert_rule_score": round(expert_rule_score, 4),
+        "callstack_match_score": round(callstack_match_score, 4),
+        "subsystem_match_score": round(subsystem_match_score, 4),
+        "version_match_score": round(version_match_score, 4),
+        "llm_judge_score": round(item.llm_judge_score, 4),
+        "final_score": round(final, 4),
+        "fusion_weights": dict(EXPLAINABLE_FUSION_WEIGHTS),
+    }
+
+
+def _compute_expert_rule_score(
+    patch_bug_type: str,
+    crash_bug_type: str,
+    rule_id: str,
+) -> float:
+    """计算专家规则匹配度分数"""
+    if not crash_bug_type or crash_bug_type == "unknown":
+        return 0.5  # 无法判断，给中性分
+
+    if patch_bug_type == crash_bug_type:
+        return 0.95  # 完全匹配
+    elif patch_bug_type and crash_bug_type:
+        # 宽松匹配：bug_type 之间存在别名关系
+        from ....common.taxonomy import BUG_TYPE_ALIASES, normalize_bug_type
+        try:
+            crash_normalized = normalize_bug_type(crash_bug_type)
+            patch_normalized = normalize_bug_type(patch_bug_type)
+            if crash_normalized == patch_normalized:
+                return 0.85
+        except Exception:
+            pass
+
+    # 有规则匹配但类型不完全一致
+    if rule_id:
+        return 0.70
+
+    return 0.30  # 不匹配
+
+
+def _compute_callstack_match_score(
+    metadata: Dict[str, Any],
+    crash_call_trace: List[str],
+    crash_subsystem: str,
+) -> float:
+    """计算调用栈匹配度分数"""
+    if not crash_call_trace:
+        return 0.30  # 无调用栈信息，给低分
+
+    trace_text = " ".join(crash_call_trace).lower() if crash_call_trace else ""
+
+    # 1. 检查补丁修改的文件是否出现在调用栈中
+    files_changed = metadata.get("files_changed", [])
+    if files_changed:
+        if any(f.lower() in trace_text for f in files_changed):
+            return 0.90  # 文件精确出现在调用栈中
+
+    # 2. 检查补丁修改的函数是否出现在调用栈中
+    changed_funcs = metadata.get("changed_functions", [])
+    if changed_funcs:
+        if any(f.lower() in trace_text for f in changed_funcs):
+            return 1.00  # 精确函数匹配 — 最高分
+
+    # 3. 检查子系统是否一致
+    patch_subsystem = metadata.get("subsystem", "")
+    if patch_subsystem and crash_subsystem:
+        if patch_subsystem == crash_subsystem:
+            return 0.50  # 同子系统，可能间接匹配
+
+    return 0.10  # 无匹配信号
+
+
+def _compute_subsystem_match_score(
+    patch_subsystem: str,
+    crash_subsystem: str,
+) -> float:
+    """计算子系统匹配度分数"""
+    if not patch_subsystem or not crash_subsystem:
+        return 0.30
+
+    if patch_subsystem == crash_subsystem:
+        return 1.00
+
+    # 父子关系
+    if patch_subsystem in _SUBSYSTEM_HIERARCHY.get(crash_subsystem, []):
+        return 0.80
+    if crash_subsystem in _SUBSYSTEM_HIERARCHY.get(patch_subsystem, []):
+        return 0.75
+
+    # 关联关系
+    if patch_subsystem in _RELATED_SUBSYSTEMS.get(crash_subsystem, []):
+        return 0.60
+    if crash_subsystem in _RELATED_SUBSYSTEMS.get(patch_subsystem, []):
+        return 0.55
+
+    return 0.20
+
+
+def generate_why_not_explanations(
+    ranked_items: List[RankedItem],
+) -> List[Dict[str, Any]]:
+    """为排名 ≥2 的补丁生成 '为什么不是 Top-1' 比较解释
+
+    对每个非首位补丁，与 Top-1 进行多维度对比，
+    找出相同点和差异点，生成人类可读的排序理由。
+
+    Args:
+        ranked_items: 已排序的补丁列表
+
+    Returns:
+        List of WhyNotExplanation dicts，与 ranked_items 等长，
+        其中 index 0 (Top-1) 为 None
+    """
+    explanations = []
+
+    if len(ranked_items) < 2:
+        # 只有一个结果，无需对比
+        for _ in ranked_items:
+            explanations.append(None)
+        return explanations
+
+    top1 = ranked_items[0]
+
+    for i, item in enumerate(ranked_items):
+        if i == 0:
+            # Top-1 不需要解释
+            explanations.append(None)
+            continue
+
+        same = []
+        different = []
+
+        # ── 1. 比较 Bug 类型 ────────────────────
+        if item.bug_type == top1.bug_type and item.bug_type != "unknown":
+            same.append(f"同属于 {item.bug_type} 修复")
+        elif item.bug_type != top1.bug_type:
+            different.append(
+                f"Bug 类型不同 ({item.bug_type} vs {top1.bug_type})，Top-1 更匹配当前根因"
+            )
+
+        # ── 2. 比较子系统 ──────────────────────
+        if item.subsystem == top1.subsystem and item.subsystem != "unknown":
+            same.append(f"同一子系统 {item.subsystem}")
+        elif item.subsystem != top1.subsystem:
+            different.append(
+                f"属于 {item.subsystem} 子系统，与崩溃子系统关联度低于 {top1.subsystem}"
+            )
+
+        # ── 3. 比较分数差距 ────────────────────
+        score_gap = top1.final_score - item.final_score
+        if score_gap > 0.15:
+            different.append(
+                f"综合评分差距较大 (差 {score_gap:.0%})，各维度均弱于 Top-1"
+            )
+        elif score_gap > 0.05:
+            different.append(
+                f"综合评分存在差距 (差 {score_gap:.0%})"
+            )
+
+        # ── 4. 比较 Reranker 分数 ──────────────
+        if item.reranker_score < top1.reranker_score - 0.10:
+            different.append(
+                "Reranker 语义重排分数显著低于 Top-1，语义层面关联度不足"
+            )
+
+        # ── 5. 版本维度 ────────────────────────
+        item_vw = item.metadata.get("_version_weight", 1.0)
+        top1_vw = top1.metadata.get("_version_weight", 1.0)
+        if item_vw < 1.0 and top1_vw >= 1.0:
+            different.append(
+                f"版本匹配权重降低 ({item_vw:.0%})，补丁版本与崩溃内核存在兼容性差异"
+            )
+
+        # ── 6. 生成总结 ────────────────────────
+        if different:
+            ranking_reason = f"综合 {len(different)} 个差异因素，排名第 {item.rank}"
+        else:
+            ranking_reason = f"与 Top-1 特征相近，但因综合分数略低排名第 {item.rank}"
+
+        explanations.append({
+            "compared_to_rank": 1,
+            "same_aspects": same,
+            "different_aspects": different,
+            "ranking_reason": ranking_reason,
+        })
+
+    return explanations
+
+
+def _enrich_rank_reason_extended(
+    item: RankedItem,
+    score_breakdown: Dict[str, Any],
+    why_not: Optional[Dict[str, Any]] = None,
+) -> str:
+    """生成增强版排名理由 — 融合多维评分信息"""
+    parts = []
+
+    # 综合分数判定
+    final = score_breakdown.get("final_score", item.final_score)
+    if final >= 0.85:
+        parts.append("高度匹配")
+    elif final >= 0.70:
+        parts.append("显著相关")
+    elif final >= 0.50:
+        parts.append("中度相关")
+    else:
+        parts.append("低度相关")
+
+    # 子系统匹配
+    ss_score = score_breakdown.get("subsystem_match_score", 0)
+    if ss_score >= 0.80:
+        parts.append("子系统精确匹配")
+    elif ss_score >= 0.50:
+        parts.append("子系统部分匹配")
+
+    # 调用栈匹配
+    cs_score = score_breakdown.get("callstack_match_score", 0)
+    if cs_score >= 0.80:
+        parts.append("调用栈直接命中")
+    elif cs_score >= 0.40:
+        parts.append("调用栈间接关联")
+
+    # 版本匹配
+    v_score = score_breakdown.get("version_match_score", 1.0)
+    if v_score >= 1.0:
+        parts.append("版本兼容")
+    elif v_score < 0.80:
+        parts.append("版本兼容性偏低")
+
+    # 专家规则
+    er_score = score_breakdown.get("expert_rule_score", 0)
+    if er_score >= 0.85:
+        parts.append("专家规则高度匹配")
+
+    return " | ".join(parts)
+
+
 __all__ = [
     # 数据结构
     "RankedItem",
@@ -627,4 +953,8 @@ __all__ = [
     "fuse_scores",
     # 完整流程
     "rerank_candidates",
+    # ★ 可解释性增强
+    "compute_score_breakdown",
+    "generate_why_not_explanations",
+    "EXPLAINABLE_FUSION_WEIGHTS",
 ]
