@@ -671,6 +671,13 @@ def compute_score_breakdown(
         Dict 可直接序列化为 ScoreBreakdown pydantic 模型
     """
 
+    # ── 0. 归一化原始分数到 0.0~1.0 ──────────
+    # FAISS 返回 L2 距离 (越低越好), Reranker 返回 0~1 相似度
+    # 将所有分数归一化到 0.0~1.0 的相似度空间
+    vec_score = _normalize_score(item.vector_score)
+    rerank_score = _clamp_01(item.reranker_score)
+    llm_score = _clamp_01(item.llm_judge_score)
+
     # ── 1. 专家规则匹配度 ────────────────────
     expert_rule_score = _compute_expert_rule_score(
         item.bug_type, crash_bug_type, rule_id
@@ -687,31 +694,53 @@ def compute_score_breakdown(
     )
 
     # ── 4. 版本匹配度 (从 metadata 中获取) ──
-    version_match_score = item.metadata.get("_version_weight", 1.0)
+    version_match_score = _clamp_01(item.metadata.get("_version_weight", 1.0))
 
     # ── 5. 综合分数 ──────────────────────────
     W = EXPLAINABLE_FUSION_WEIGHTS
     final = (
-        item.vector_score * W["embedding"]
-        + item.reranker_score * W["reranker"]
+        vec_score * W["embedding"]
+        + rerank_score * W["reranker"]
         + expert_rule_score * W["expert_rule"]
         + callstack_match_score * W["callstack_match"]
         + subsystem_match_score * W["subsystem_match"]
         + version_match_score * W["version_match"]
-        + item.llm_judge_score * W["llm_judge"]
+        + llm_score * W["llm_judge"]
     )
+    final = _clamp_01(final)
 
     return {
-        "embedding_score": round(item.vector_score, 4),
-        "reranker_score": round(item.reranker_score, 4),
+        "embedding_score": round(vec_score, 4),
+        "reranker_score": round(rerank_score, 4),
         "expert_rule_score": round(expert_rule_score, 4),
         "callstack_match_score": round(callstack_match_score, 4),
         "subsystem_match_score": round(subsystem_match_score, 4),
         "version_match_score": round(version_match_score, 4),
-        "llm_judge_score": round(item.llm_judge_score, 4),
+        "llm_judge_score": round(llm_score, 4),
         "final_score": round(final, 4),
         "fusion_weights": dict(EXPLAINABLE_FUSION_WEIGHTS),
     }
+
+
+def _clamp_01(value: float) -> float:
+    """将值限制在 [0.0, 1.0] 范围内"""
+    return max(0.0, min(1.0, float(value)))
+
+
+def _normalize_score(score: float) -> float:
+    """将原始向量分数归一化到 0.0~1.0
+
+    FAISS 返回 L2 距离 (越低越好, 可以为 >1.0)
+    BGE-M3 返回余弦相似度或点积
+
+    策略:
+    - score ≤ 1.0: 假定已是相似度, 直接 clamp
+    - score > 1.0: 假定是 L2 距离, 用 1/(1+distance) 转换
+    """
+    if score <= 1.0:
+        return _clamp_01(score)
+    # L2 距离 → 相似度
+    return _clamp_01(1.0 / (1.0 + score))
 
 
 def _compute_expert_rule_score(

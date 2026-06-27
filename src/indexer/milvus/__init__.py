@@ -963,12 +963,12 @@ class MilvusClient:
     def _resolve_backend(self):
         """解析使用哪个后端
 
-        优先级:
+        优先级 (★ 数据可用性优先):
         1. 环境变量 MILVUS_FORCE_FAISS=1 → 强制 FAISS
-        2. Milvus Lite 本地数据库 (MILVUS_DB_PATH 环境变量或默认路径)
-        3. backend_type="faiss" → FAISS
-        4. backend_type="milvus" → 先试 Milvus Docker, 不可用则试 Milvus Lite
-        5. auto → Milvus Lite > Milvus Docker > FAISS
+        2. FAISS 已有数据 → 直接使用 FAISS (避免空的 Milvus Lite 干扰)
+        3. Milvus Lite 有数据 → 使用 Milvus Lite
+        4. Milvus Docker 有数据 → 使用 Milvus Docker
+        5. 以上都无 → 回退 FAISS (空索引，待填充)
         """
         # 环境变量 FAISS_INDEX_PATH 可覆盖默认路径 (用于本地完整数据测试)
         env_faiss_path = os.environ.get("FAISS_INDEX_PATH", "").strip()
@@ -988,13 +988,32 @@ class MilvusClient:
             self._try_load_faiss()
             return
 
+        # ★ 优先检查 FAISS 是否已有数据 (最高优先级，跳过空 Milvus Lite)
+        if self._faiss_has_data():
+            self._active_backend = BackendType.FAISS
+            print(f"FAISS 模式 (已有 {self._read_faiss_count()} 条数据, path={self.faiss_index_path})")
+            self._try_load_faiss()
+            return
+
         # ── 尝试 Milvus Lite (本地文件模式) ──────────────
         milvus_db_path = os.environ.get(
             "MILVUS_DB_PATH",
             "data/milvus_lite.db",
         )
         if self._try_milvus_lite(milvus_db_path):
-            return
+            try:
+                if self._milvus.connect() and self._milvus._collection is not None:
+                    self._milvus._collection.flush()
+                    milvus_count = self._milvus._collection.num_entities
+                else:
+                    milvus_count = 0
+            except Exception:
+                milvus_count = 0
+
+            if milvus_count > 0:
+                return  # Milvus Lite 有数据，使用它
+
+            print(f"Info: Milvus Lite collection 为空 ({milvus_count} 条), 回退 FAISS")
 
         # ── 尝试 Milvus Docker (生产模式) ──────────────
         if self.backend_type == BackendType.MILVUS or self.backend_type == BackendType.AUTO:
@@ -1005,10 +1024,33 @@ class MilvusClient:
             else:
                 print("Info: Milvus Docker 不可达 (localhost:19530)")
 
-        # ── 回退到 FAISS ─────────────────────────────────
+        # ── 最终回退到 FAISS (可能为空) ────────────────
         self._active_backend = BackendType.FAISS
-        print("Auto → FAISS 模式 (Milvus 不可达)")
+        print(f"Auto → FAISS 模式 (path={self.faiss_index_path})")
         self._try_load_faiss()
+
+    def _faiss_has_data(self) -> bool:
+        """检查 FAISS 索引文件是否有数据"""
+        import json, os as _os
+        meta_path = self.faiss_index_path + ".meta.json"
+        if not _os.path.isfile(meta_path):
+            return False
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+            return meta.get("id_counter", 0) > 0
+        except Exception:
+            return False
+
+    def _read_faiss_count(self) -> int:
+        """读取 FAISS 索引中的记录数"""
+        import json, os as _os
+        meta_path = self.faiss_index_path + ".meta.json"
+        try:
+            with open(meta_path) as f:
+                return json.load(f).get("id_counter", 0)
+        except Exception:
+            return 0
 
     def _try_milvus_lite(self, db_path: str) -> bool:
         """尝试使用 Milvus Lite (嵌入式本地文件模式)

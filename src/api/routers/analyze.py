@@ -1,6 +1,7 @@
 """分析路由 — 宕机日志分析的核心 API."""
 
 import asyncio
+import time
 import uuid
 import threading
 from datetime import datetime, timezone
@@ -105,6 +106,7 @@ def _get_task(task_id: str) -> Optional[dict]:
 
 # ── 模式开关: 优先使用真实 RAG Pipeline, 向量库为空时回退 Mock ──
 _USE_REAL_PIPELINE = None  # None = 自动检测, True = 强制真实, False = 强制 Mock
+_LAST_READY_CHECK_TIME = 0.0  # 上次检查时间戳
 
 
 # ★ 复用 shared dependency 中的 index ready 检查
@@ -112,13 +114,31 @@ _check_index_ready = check_index_ready
 
 
 def _should_use_real_pipeline() -> bool:
-    """决定使用真实流水线还是 mock"""
-    global _USE_REAL_PIPELINE
-    if _USE_REAL_PIPELINE is not None:
-        return _USE_REAL_PIPELINE
-    # 自动检测
+    """决定使用真实流水线还是 mock
+
+    ★ 关键设计:
+    - True 永久缓存 (向量库不会在运行时消失)
+    - False 每 30 秒重试一次 (启动时 FAISS 索引可能还在加载中)
+    """
+    global _USE_REAL_PIPELINE, _LAST_READY_CHECK_TIME
+    now = time.time()
+
+    # True 永久有效
+    if _USE_REAL_PIPELINE:
+        return True
+
+    # False 时每 30 秒重试一次
+    if _USE_REAL_PIPELINE is not None and _LAST_READY_CHECK_TIME > 0:
+        if now - _LAST_READY_CHECK_TIME < 30:
+            return False
+
+    _LAST_READY_CHECK_TIME = now
     ready = _check_index_ready()
-    if not ready:
+    if ready:
+        _USE_REAL_PIPELINE = True
+        logger.info("✓ 向量库就绪，切换到真实 RAG Pipeline")
+    else:
+        _USE_REAL_PIPELINE = False
         logger.warning("向量库为空, 回退到 Mock 模式。请先运行: python scripts/index_all_commits.py")
     return ready
 
