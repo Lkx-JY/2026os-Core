@@ -22,8 +22,12 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    import faiss  # type: ignore[import-untyped]
 
 # 将项目根目录加入 sys.path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -59,7 +63,7 @@ def load_full_data(data_dir: str) -> tuple[dict, np.ndarray]:
     # 重建向量: FAISS IndexIVFFlat 的 reconstruct 方法
     print("🔄 提取向量...")
     t0 = time.time()
-    vectors = index.reconstruct_n(0, index.ntotal)
+    vectors = np.asarray(index.reconstruct_n(0, index.ntotal))
     print(f"   ✅ shape={vectors.shape} ({time.time()-t0:.1f}s)")
 
     return meta, vectors
