@@ -10,10 +10,11 @@ from datetime import datetime
 # ============================================================================
 
 class ScoreBreakdown(BaseModel):
-    """多维评分明细 — 记录每个评分维度的独立分数
+    """多维评分明细 — 记录每个评分维度的独立分数与贡献值
 
     用于前端展示排序依据，满足赛题"可解释性"评审要求。
     每个维度独立评分，最终按权重融合为 final_score。
+    新增 score_contribution: 展示每维度的实际贡献值 (weight × score).
     """
 
     # ── 向量维度 ──
@@ -49,7 +50,7 @@ class ScoreBreakdown(BaseModel):
     # ── 版本维度 ──
     version_match_score: float = Field(
         default=0.0, ge=0.0, le=1.0,
-        description="版本匹配度 — 补丁内核版本与崩溃内核版本的兼容性评分"
+        description="版本匹配度 — 补丁内核版本与崩溃内核版本的兼容性评分 (★ 已融入 final_score)"
     )
 
     # ── LLM 维度 ──
@@ -61,7 +62,17 @@ class ScoreBreakdown(BaseModel):
     # ── 综合 ──
     final_score: float = Field(
         default=0.0, ge=0.0, le=1.0,
-        description="加权综合分数"
+        description="加权综合分数 (含 version_penalty)"
+    )
+
+    # ── ★ 维度贡献明细 (weight × score) ──
+    score_contribution: Optional[dict] = Field(
+        default=None,
+        description=(
+            "各维度的实际贡献值: {'embedding': 0.138, 'reranker': 0.213, ...}。"
+            "每项 = weight × score, 求和 = final_score。"
+            "用于前端展示 '为什么是这个分数' 的可解释性。"
+        )
     )
 
     # ── 融合权重 ──
@@ -76,6 +87,93 @@ class ScoreBreakdown(BaseModel):
             "llm_judge": 0.15,
         },
         description="各维度融合权重配置"
+    )
+
+    # ── ★ 版本惩罚 (已从 final_score 中体现) ──
+    version_penalty: float = Field(
+        default=0.0, ge=-1.0, le=1.0,
+        description=(
+            "版本兼容性惩罚/奖励值: 负值=降权, 正值=加权。"
+            "已计入 final_score, 此处单独展示以满足可解释性。"
+        )
+    )
+
+
+class ConfidenceBreakdown(BaseModel):
+    """根因置信度拆解 — 解释为什么是这个置信度
+
+    面向评委展示置信度的每一个来源, 满足赛题"可解释性"评审要求。
+    不做黑盒数值, 每一项都有明确的证据来源。
+    """
+
+    rule_match: float = Field(
+        default=0.0, ge=0.0,
+        description="专家规则匹配贡献 — 基于 panic keyword 模式匹配"
+    )
+    fault_address_pattern: float = Field(
+        default=0.0, ge=0.0,
+        description="故障地址模式贡献 — 基于 fault address 的特征分析"
+    )
+    subsystem_match: float = Field(
+        default=0.0, ge=0.0,
+        description="子系统匹配贡献 — 基于调用栈识别到的子系统"
+    )
+    call_trace_evidence: float = Field(
+        default=0.0, ge=0.0,
+        description="调用栈证据贡献 — 基于调用栈中的函数特征 (缺失时为 0)"
+    )
+    register_state: float = Field(
+        default=0.0, ge=0.0,
+        description="寄存器状态贡献 — 基于寄存器/错误码分析 (dmesg 模式下通常缺失)"
+    )
+    historical_similarity: float = Field(
+        default=0.0, ge=0.0,
+        description="历史相似度贡献 — 基于向量检索 Top-1 的语义相似度"
+    )
+
+    def total_percentage(self) -> float:
+        return round(
+            self.rule_match + self.fault_address_pattern + self.subsystem_match
+            + self.call_trace_evidence + self.register_state + self.historical_similarity,
+            1
+        )
+
+
+class EvidenceCoverageItem(BaseModel):
+    """单个证据项的覆盖状态"""
+
+    name: str = Field(..., description="证据项名称, 如 'Panic Keyword'")
+    status: str = Field(..., description="available | missing | partial")
+    weight: str = Field(..., description="High | Medium | Low")
+    used: bool = Field(default=False, description="是否已用于分析")
+    detail: Optional[str] = Field(default=None, description="补充说明")
+
+
+class EvidenceCoverage(BaseModel):
+    """证据完整度评估 — 比赛加分模块
+
+    面向评委展示:
+    1. 哪些证据已使用
+    2. 哪些证据缺失
+    3. 当前分析的可靠性评级
+
+    符合赛题"演示质量与可解释性 (15%)"评审要点。
+    """
+
+    items: list[EvidenceCoverageItem] = Field(
+        default_factory=list, description="各证据项的覆盖状态"
+    )
+    coverage_pct: float = Field(
+        default=0.0, ge=0.0, le=100.0,
+        description="证据完整度百分比 = sum(available_weights) / sum(all_weights)"
+    )
+    reliability: str = Field(
+        default="Medium",
+        description="分析可靠性评级: High (>70%) / Medium (40-70%) / Low (<40%)"
+    )
+    reliability_reason: str = Field(
+        default="",
+        description="可靠性评级理由 — 哪些关键证据缺失导致了评级降低"
     )
 
 
@@ -183,16 +281,33 @@ class WhyNotExplanation(BaseModel):
 # ============================================================================
 
 class RootCauseInfo(BaseModel):
-    """结构化根因分析结果"""
+    """结构化根因分析结果 — 两层抽象 + 置信度拆解"""
+
+    # ── 第一层: Bug Type (现象分类) ──
     root_cause: str = Field(
-        ..., description="根因类型: race_condition, use_after_free, deadlock, null_pointer, etc."
+        ..., description="Bug 类型: race_condition, use_after_free, deadlock, null_pointer_dereference, etc."
     )
     subsystem: str = Field(..., description="受影响的内核子系统: net, mm, fs, kernel, drivers, etc.")
-    confidence: float = Field(..., ge=0.0, le=1.0, description="根因分析置信度")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="根因分析综合置信度")
     summary: str = Field(..., description="根因自然语言描述")
     key_symptoms: list[str] = Field(default_factory=list, description="关键症状列表")
 
-    # ★ 可解释性增强：根因证据
+    # ── ★ 第二层: Possible Causes (根因抽象) — 区分 Bug Type 与深层根因 ──
+    possible_causes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "基于 Bug Type 推导的可能深层原因, 如 Null Pointer Dereference → "
+            "['Missing NULL check', 'Object lifecycle problem', "
+            "'Released object access', 'Driver initialization failure']"
+        )
+    )
+
+    # ── ★ 置信度拆解 (可解释性增强) ──
+    confidence_breakdown: Optional[ConfidenceBreakdown] = Field(
+        default=None, description="置信度来源拆解 — 展示为什么是这个置信度"
+    )
+
+    # ── 可解释性增强：根因证据 ──
     evidence: Optional[RootCauseEvidence] = Field(
         default=None, description="根因证据详情 — 展示为什么判定此根因"
     )
@@ -218,7 +333,7 @@ class MatchedPatch(BaseModel):
     commit: CommitInfo = Field(..., description="Commit 详细信息")
     relevance_score: float = Field(..., ge=0.0, description="综合相关性分数")
     recall_score: Optional[float] = Field(default=None, description="向量召回相似度")
-    rerank_score: Optional[float] = Field(default=None, description="Reranker 精确匹配分")
+    reranker_score: Optional[float] = Field(default=None, description="Reranker 精确匹配分")
     match_reason: str = Field(default="", description="匹配理由说明")
     diff_highlights: list[str] = Field(default_factory=list, description="Diff 中匹配的关键行")
 

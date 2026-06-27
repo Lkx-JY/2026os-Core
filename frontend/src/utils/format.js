@@ -45,10 +45,21 @@ export function formatPercent(value) {
   return `${(value * 100).toFixed(1)}%`
 }
 
-/** 格式化分数 (raw score, >1 时直接显示数值, 如 2.81 / 12.00) */
+/** 格式化分数 (0.0 ~ 1.0, 超出范围时 clamp 后显示) */
 export function formatScore(value) {
   if (value == null) return '—'
-  return value.toFixed(2)
+  const clamped = Math.max(0, Math.min(1, Number(value)))
+  return clamped.toFixed(3)
+}
+
+/** 获取分数语义描述 */
+export function scoreInterpretation(value) {
+  if (value == null) return ''
+  if (value >= 0.85) return '高相关'
+  if (value >= 0.70) return '显著相关'
+  if (value >= 0.50) return '中度相关'
+  if (value >= 0.30) return '低度相关'
+  return '弱相关'
 }
 
 /** 截断 commit hash */

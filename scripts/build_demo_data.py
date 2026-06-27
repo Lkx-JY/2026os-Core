@@ -131,6 +131,9 @@ def select_stratified_entries(
 def build_demo_index(vectors: np.ndarray, nlist: int = 50) -> "faiss.Index":
     """构建 Demo 用的小型 FAISS IVF 索引。
 
+    ★ 关键: 对向量做 L2 归一化，确保内积 = 余弦相似度，范围 [-1, 1]。
+    未归一化向量会导致内积 >> 1，所有分数被 clamp 到 1.0，失去区分度。
+
     Args:
         vectors: (N, 1024) float32 向量矩阵
         nlist: IVF 聚类数 (Demo 用小 nlist)
@@ -139,6 +142,11 @@ def build_demo_index(vectors: np.ndarray, nlist: int = 50) -> "faiss.Index":
         训练好的 FAISS IndexIVFFlat
     """
     import faiss
+
+    # ★ 必须归一化: 确保 FAISS IP 搜索返回余弦相似度
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    vectors = vectors / (norms + 1e-8)
+    print(f"   ✓ 向量已归一化 (L2 norm)")
 
     dim = vectors.shape[1]
     quantizer = faiss.IndexFlatIP(dim)

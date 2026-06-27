@@ -739,15 +739,36 @@ def compute_version_analysis(
     # ── 2. 解析崩溃内核版本 ────────────────────
     crash_major = 0
     crash_minor = 0
+    crash_version_valid = False
     if crash_kernel_version:
         crash_parts = crash_kernel_version.split(".")
         try:
             crash_major = int(crash_parts[0])
             crash_minor = int(crash_parts[1]) if len(crash_parts) > 1 else 0
+            # ★ 合理性校验: Linux 内核主版本号范围 2~7
+            if 2 <= crash_major <= 7:
+                crash_version_valid = True
         except (ValueError, IndexError):
             pass
 
     # ── 3. 计算距离 ────────────────────────────
+    # ★ 当 crash_kernel_version 缺失或无效时，不计算荒谬距离
+    if not crash_version_valid:
+        patch_ver_str = f"{patch_major}.{patch_minor}.0" if patch_major is not None else None
+        return {
+            "crash_kernel_version": crash_kernel_version or None,
+            "patch_kernel_version": patch_ver_str,
+            "version_distance": "Unknown — Crash Kernel Version 未提供",
+            "distance_value": -1,  # -1 表示未知
+            "compatibility": "Unknown",
+            "compatibility_reason": (
+                "无法评估版本兼容性，因为崩溃日志中未提供 Kernel Version。"
+                "建议在分析时手动输入内核版本以获得准确的版本匹配。"
+            ),
+            "patch_release_date": patch_date or None,
+            "crash_release_date": None,
+        }
+
     if patch_major is None or patch_minor is None:
         version_distance = "Unknown"
         compatibility = "Unknown"

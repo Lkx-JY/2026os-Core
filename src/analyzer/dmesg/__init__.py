@@ -42,19 +42,32 @@ CALL_TRACE_START_PATTERNS = [
     r"---\[ end trace [\da-fA-F]+ \]---",
 ]
 
-# Call Trace 行格式: [<ffffffff81001234>] func+0x12/0x34
+# Call Trace 行格式 — 支持多种内核版本和架构:
+#   [<ffffffff81001234>] func+0x12/0x34  (x86_64 标准格式)
+#   [  245.123472]  func+0x36/0x70       (带时间戳前缀，ARM64/新内核)
+#   [  245.123472] [<ffffffff81001234>] func+0x12/0x34  (时间戳+地址)
+#   ? func+0x12/0x34                     (不确定帧)
+_CALL_TRACE_FUNC_PATTERN = re.compile(
+    r'(?:\w+|0x[0-9a-fA-F]+)\+0x[0-9a-fA-F]+/0x[0-9a-fA-F]+'
+)
 CALL_TRACE_LINE_PATTERN = re.compile(
-    r"\[\s*<[\da-fA-F]+>\]\s+"
+    r"\[\s*<[\da-fA-F]+>\]\s+"  # [<hex>] 前缀格式
+)
+# 带时间戳的 Call Trace 行: 以 [时间戳] 开头 + 函数+偏移/大小
+_TIMESTAMP_TRACE_PATTERN = re.compile(
+    r'^\[\s*[\d]+\.[\d]+\]\s+'  # [  seconds.usecs]
 )
 
 # 非 Call Trace 行的结束标记
 CALL_TRACE_END_PATTERNS = [
-    r"Code: .+",                       # Code: 开头的反汇编行
-    r"RIP: .+",                        # RIP 寄存器行
-    r"Kernel panic - not syncing:",    # 新的 panic
-    r"---\[ end trace",                # 结束标记
-    r"^\s*$",                          # 连续空行
+    r"Code: (?:Bad RIP value\.|[0-9a-fA-F].+)",  # Code: 反汇编行
+    r"Kernel panic - not syncing:",                # 新的 panic
+    r"---\[ end trace",                            # 结束标记
+    r"^\s*$",                                      # 连续空行
 ]
+# 注意: RIP: 行已从 CALL_TRACE_END_PATTERNS 移除 —
+#   RIP 包含崩溃精确函数名 (如 ext4_writepages+0x1a2/0x3b0)，
+#   应作为关键证据提取而非丢弃
 
 # 扩展 Panic/Oops/BUG 匹配模式
 PANIC_OPS_PATTERNS = {
@@ -102,16 +115,48 @@ PANIC_OPS_PATTERNS = {
 }
 
 
+def _is_call_trace_line(line: str) -> bool:
+    """判断一行是否是有效的调用栈帧
+
+    支持三种格式:
+    1. [<ffffffff81001234>] func+0x12/0x34  (x86_64 标准)
+    2. [  245.123472]  func+0x36/0x70       (带时间戳, ARM64/新内核)
+    3. [  245.123472] [<ffffffff81001234>] func+0x12/0x34  (时间戳+地址)
+    4. ? func+0x12/0x34                      (不确定帧)
+    """
+    stripped = line.strip()
+    if not stripped:
+        return False
+    # 不确定帧
+    if stripped.startswith('?'):
+        return bool(_CALL_TRACE_FUNC_PATTERN.search(stripped))
+    # 带时间戳前缀: 去掉时间戳后检查是否包含函数+偏移
+    if _TIMESTAMP_TRACE_PATTERN.match(stripped):
+        # 去掉时间戳前缀
+        after_ts = _TIMESTAMP_TRACE_PATTERN.sub('', stripped, count=1).strip()
+        # 检查是否包含 <hex> 地址格式 或 func+offset/size
+        if CALL_TRACE_LINE_PATTERN.search(after_ts):
+            return True
+        if _CALL_TRACE_FUNC_PATTERN.search(after_ts):
+            return True
+        return False
+    # 标准 [<hex>] 格式
+    if CALL_TRACE_LINE_PATTERN.search(stripped):
+        return True
+    # 纯 func+offset/size 格式 (无地址、无时间戳)
+    if _CALL_TRACE_FUNC_PATTERN.search(stripped):
+        return True
+    return False
+
+
 def locate_call_trace_bounds(dmesg_content: str) -> Tuple[int, int]:
     """使用正则定位 Call Trace 的开始行号和结束行号
 
-    这是定位阶段的核心函数，通过多层正则策略精确找到 Call Trace 的边界。
-
     策略:
     1. 查找 "Call Trace:" 等起始标记
-    2. 从起始行开始收集以 `[<hex>]` 格式的栈帧
-    3. 遇到非栈帧行或结束标记时终止
-    4. 如果没有显式标记，查找单个 [<hex>] 行作为降级
+    2. 从起始行开始收集调用栈帧 (支持多格式)
+    3. 遇到结束标记或非栈帧行时终止
+    4. 如果没有显式标记，查找函数+偏移行作为降级
 
     Args:
         dmesg_content: 完整的 dmesg 日志文本
@@ -126,37 +171,28 @@ def locate_call_trace_bounds(dmesg_content: str) -> Tuple[int, int]:
         stripped = line.strip()
         for pattern in CALL_TRACE_START_PATTERNS:
             if re.search(pattern, stripped):
-                # 找到 Call Trace 起始行
                 start = i
-                # 收集后续的栈帧行
                 end = i
                 for j in range(i + 1, len(lines)):
                     next_line = lines[j].strip()
-                    # 检查是否是有效的调用栈行
-                    if CALL_TRACE_LINE_PATTERN.search(next_line):
-                        end = j
-                    elif next_line.startswith('?'):
-                        # "? func+0x12/0x34" 格式（不确定的帧）
+                    if _is_call_trace_line(next_line):
                         end = j
                     elif any(re.search(p, next_line) for p in CALL_TRACE_END_PATTERNS):
                         break
                     else:
-                        # 非调用栈行，如果已经收集了足够多帧，终止
+                        # 非调用栈行，如果已收集了帧则终止
                         if end > start:
                             break
-                        # 否则继续寻找（可能是空行或日志行）
                 return (start, end)
 
-    # 策略 2: 降级 — 找第一个 [<hex>] 格式的行
+    # 策略 2: 降级 — 找第一个包含 func+offset/size 格式的行
     for i, line in enumerate(lines):
-        if CALL_TRACE_LINE_PATTERN.search(line.strip()):
+        if _is_call_trace_line(line):
             start = i
             end = i
             for j in range(i + 1, len(lines)):
                 next_line = lines[j].strip()
-                if CALL_TRACE_LINE_PATTERN.search(next_line):
-                    end = j
-                elif next_line.startswith('?'):
+                if _is_call_trace_line(next_line):
                     end = j
                 elif any(re.search(p, next_line) for p in CALL_TRACE_END_PATTERNS):
                     break
@@ -190,7 +226,7 @@ def extract_call_trace(dmesg_content: str) -> List[str]:
     call_trace = []
     for line in trace_lines:
         stripped = line.strip()
-        if CALL_TRACE_LINE_PATTERN.search(stripped) or stripped.startswith('?'):
+        if _is_call_trace_line(stripped):
             call_trace.append(stripped)
 
     return call_trace
@@ -306,10 +342,16 @@ def parse_dmesg(dmesg_content: str) -> CrashFeature:
     feature.subsystem = _detect_subsystem_from_dmesg(dmesg_content)
     feature.bug_type = _detect_bug_type_from_dmesg(dmesg_content)
 
-    # 提取内核版本
-    version_match = re.search(r"Linux version (\S+)", dmesg_content)
-    if version_match:
-        feature.kernel_version = version_match.group(1)
+    # ★ 提取内核版本 — 支持多种格式:
+    #   "Linux version 5.4.0-150-generic" (标准)
+    #   "Tainted: G  OE  5.4.0-150-generic #167-Ubuntu" (嵌入在 CPU/Tainted 行)
+    #   "Linux version 6.1.0-rc3+" (rc/next 版本)
+    feature.kernel_version = _extract_kernel_version(dmesg_content)
+
+    # ★ 提取 RIP 函数名 — 崩溃发生的精确位置
+    rip_func = _extract_rip_function(dmesg_content)
+    if rip_func:
+        feature.extra_info["rip_function"] = rip_func
 
     # 提取已加载模块
     module_pattern = re.findall(r"(\S+): loading out-of-tree module", dmesg_content)
@@ -719,6 +761,54 @@ def parse_dmesg_with_llm(
             feature.extra_info["llm_error"] = str(e)
 
     return feature
+
+
+# ============================================================================
+# 辅助提取函数
+# ============================================================================
+
+def _extract_kernel_version(dmesg_content: str) -> str:
+    """从 dmesg 中提取内核版本 — 支持多种格式
+
+    支持的格式:
+    1. "Linux version 5.4.0-150-generic (buildd@...) #167-Ubuntu ..."
+    2. "Linux version 6.1.0-rc3+"
+    3. "CPU: ... Tainted: G  OE  5.4.0-150-generic #167-Ubuntu" (嵌入式)
+    4. "Kernel: 5.15.0-91-generic x86_64"
+    """
+    patterns = [
+        # 标准格式: Linux version X.Y.Z-variant
+        re.compile(r"Linux version (\d+\.\d+[\.\d]*[-\w+]*)", re.IGNORECASE),
+        # Tainted 嵌入格式: Tainted: ... X.Y.Z-version #N
+        re.compile(r"Tainted:\s*.*?\s+(\d+\.\d+[\.\d]*[-\w]*)", re.IGNORECASE),
+        # Kernel: X.Y.Z 格式
+        re.compile(r"Kernel:\s*(\d+\.\d+[\.\d]*[-\w]*)", re.IGNORECASE),
+    ]
+
+    for pat in patterns:
+        match = pat.search(dmesg_content)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _extract_rip_function(dmesg_content: str) -> str:
+    """从 dmesg 中提取 RIP 指令指针指向的函数名
+
+    RIP 行格式: RIP: 0010:ext4_writepages+0x1a2/0x3b0
+    包含崩溃发生的精确函数名和偏移，是检索的关键信号。
+
+    Returns:
+        函数名 (如 "ext4_writepages") 或空字符串
+    """
+    # RIP: xxxx:func_name+offset/size
+    rip_match = re.search(
+        r'RIP:\s*(?:[0-9a-fA-F]+:)?(\w+)\+0x[0-9a-fA-F]+/0x[0-9a-fA-F]+',
+        dmesg_content, re.IGNORECASE
+    )
+    if rip_match:
+        return rip_match.group(1)
+    return ""
 
 
 __all__ = [

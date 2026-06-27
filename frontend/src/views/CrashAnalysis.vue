@@ -137,6 +137,22 @@ Call Trace:
 
     <!-- 结果展示区域 -->
     <div v-if="showResult && currentTask" class="result-area fade-in-up">
+      <!-- ★ 缺失关键证据提示横幅 -->
+      <el-alert
+        v-if="hasMissingCriticalEvidence"
+        title="⚠️ 关键证据缺失 — 分析精度受限"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="mb-4"
+      >
+        <ul style="margin: 4px 0; padding-left: 18px;">
+          <li v-if="!hasCallTrace">Call Trace 缺失 — 无法进行调用栈级别的根因确认</li>
+          <li v-if="!hasKernelVersion">Kernel Version 未知 — 版本过滤和兼容性评估不可用</li>
+        </ul>
+        当前分析主要依赖 panic 关键词和语义检索，建议补充以上信息后重新分析以获得更准确的结果。
+      </el-alert>
+
       <!-- 操作栏 — 新建分析 / 查看历史 -->
       <div class="result-toolbar">
         <el-button type="primary" @click="resetForm" :icon="Plus">
@@ -212,6 +228,90 @@ Call Trace:
             </el-descriptions-item>
           </el-descriptions>
           <p class="mt-4">{{ currentTask.result.root_cause.summary }}</p>
+
+          <!-- ★ Possible Causes — 第二层根因抽象 -->
+          <template v-if="currentTask.result.root_cause.possible_causes?.length">
+            <el-divider />
+            <div class="possible-causes-section">
+              <div class="evidence-header">
+                <span>🔬 可能的深层原因 (Possible Causes)</span>
+                <el-tag size="small" type="warning" effect="plain">Layer 2 — 根因抽象</el-tag>
+              </div>
+              <p class="text-sm text-muted mb-2">
+                {{ currentTask.result.root_cause.root_cause }} 是 Bug 类型 (发生了什么)。
+                以下列出可能导致该 Bug 的深层原因 (为什么会发生)：
+              </p>
+              <ul class="possible-causes-list">
+                <li v-for="(cause, ci) in currentTask.result.root_cause.possible_causes" :key="'cause-'+ci">
+                  {{ cause }}
+                </li>
+              </ul>
+            </div>
+          </template>
+
+          <!-- ★ Confidence Breakdown — 置信度拆解 -->
+          <template v-if="currentTask.result.root_cause.confidence_breakdown">
+            <el-divider />
+            <div class="confidence-breakdown-section">
+              <div class="evidence-header">
+                <span>📊 置信度拆解 (Confidence Breakdown)</span>
+                <el-tag size="small" type="info" effect="plain">为什么是 {{ Math.round(currentTask.result.root_cause.confidence * 100) }}%？</el-tag>
+              </div>
+              <div class="confidence-grid">
+                <div class="confidence-item">
+                  <span class="conf-label">Rule Match</span>
+                  <el-progress
+                    :percentage="currentTask.result.root_cause.confidence_breakdown.rule_match"
+                    :stroke-width="10" color="#1976D2" style="flex: 1; margin: 0 8px;"
+                  />
+                  <span class="conf-pct">+{{ currentTask.result.root_cause.confidence_breakdown.rule_match }}%</span>
+                </div>
+                <div class="confidence-item">
+                  <span class="conf-label">Fault Address</span>
+                  <el-progress
+                    :percentage="currentTask.result.root_cause.confidence_breakdown.fault_address_pattern"
+                    :stroke-width="10" color="#388E3C" style="flex: 1; margin: 0 8px;"
+                  />
+                  <span class="conf-pct">+{{ currentTask.result.root_cause.confidence_breakdown.fault_address_pattern }}%</span>
+                </div>
+                <div class="confidence-item">
+                  <span class="conf-label">Subsystem</span>
+                  <el-progress
+                    :percentage="currentTask.result.root_cause.confidence_breakdown.subsystem_match"
+                    :stroke-width="10" color="#F57C00" style="flex: 1; margin: 0 8px;"
+                  />
+                  <span class="conf-pct">+{{ currentTask.result.root_cause.confidence_breakdown.subsystem_match }}%</span>
+                </div>
+                <div class="confidence-item">
+                  <span class="conf-label">Call Trace</span>
+                  <el-progress
+                    :percentage="currentTask.result.root_cause.confidence_breakdown.call_trace_evidence"
+                    :stroke-width="10" color="#7C4DFF" style="flex: 1; margin: 0 8px;"
+                  />
+                  <span class="conf-pct">
+                    {{ currentTask.result.root_cause.confidence_breakdown.call_trace_evidence > 0 ? '+' : '' }}{{ currentTask.result.root_cause.confidence_breakdown.call_trace_evidence }}%
+                    <el-tag v-if="currentTask.result.root_cause.confidence_breakdown.call_trace_evidence === 0" size="small" type="info" style="margin-left: 4px;">缺失</el-tag>
+                  </span>
+                </div>
+                <div class="confidence-item">
+                  <span class="conf-label">Historical Similarity</span>
+                  <el-progress
+                    :percentage="currentTask.result.root_cause.confidence_breakdown.historical_similarity"
+                    :stroke-width="10" color="#009688" style="flex: 1; margin: 0 8px;"
+                  />
+                  <span class="conf-pct">+{{ currentTask.result.root_cause.confidence_breakdown.historical_similarity }}%</span>
+                </div>
+                <div class="confidence-item total">
+                  <span class="conf-label" style="font-weight: 700;">Total</span>
+                  <el-progress
+                    :percentage="Math.round(currentTask.result.root_cause.confidence * 100)"
+                    :stroke-width="14" color="#E53935" style="flex: 1; margin: 0 8px;"
+                  />
+                  <span class="conf-pct" style="font-weight: 700;">= {{ Math.round(currentTask.result.root_cause.confidence * 100) }}%</span>
+                </div>
+              </div>
+            </div>
+          </template>
 
           <!-- ★ 根因证据 (Root Cause Evidence) — 可解释性增强 -->
           <template v-if="currentTask.result.root_cause.evidence">
@@ -365,8 +465,9 @@ Call Trace:
                   <span class="evidence-item" v-if="patch.recall_score > 0">
                     <span class="evidence-check">✓</span> High Semantic Similarity
                   </span>
-                  <span class="evidence-item" v-if="patch.rerank_score > 0">
-                    <span class="evidence-check">✓</span> Cross Encoder Rank #{{ patch.rank }}
+                  <!-- Cross Encoder score (not rank) -->
+                  <span class="evidence-item" v-if="patch.reranker_score > 0">
+                    <span class="evidence-check">✓</span> Cross Encoder: {{ (patch.reranker_score * 100).toFixed(1) }}%
                   </span>
                   <span class="evidence-item" v-if="patch.match_reason">
                     <span class="evidence-check">✓</span> {{ patch.match_reason }}
@@ -386,7 +487,12 @@ Call Trace:
                 </div>
                 <div class="score-item final-score">
                   <span class="score-label">Final Score</span>
-                  <span class="score-value">{{ formatScore(patch.relevance_score) }}</span>
+                  <span class="score-value">
+                    {{ formatScore(patch.relevance_score) }}
+                    <small class="text-muted" style="font-size: 10px; display: block;">
+                      {{ scoreInterpretation(patch.relevance_score) }}
+                    </small>
+                  </span>
                 </div>
               </div>
 
@@ -457,6 +563,55 @@ Call Trace:
                       />
                       <span class="score-pct">{{ (patch.score_breakdown.llm_judge_score * 100).toFixed(0) }}%</span>
                     </div>
+
+                    <!-- ★ 维度贡献明细 (Score Contribution) -->
+                    <template v-if="patch.score_breakdown.score_contribution">
+                      <el-divider />
+                      <div class="score-contribution-header">
+                        <span>💡 各维度贡献明细 (Weight × Score)</span>
+                        <el-tag size="small" type="warning" effect="plain">为什么是这个分数？</el-tag>
+                      </div>
+                      <div class="contribution-table">
+                        <div class="contrib-row" v-if="patch.score_breakdown.score_contribution.embedding">
+                          <span class="contrib-label">Embedding</span>
+                          <span class="contrib-formula">{{ patch.score_breakdown.fusion_weights?.embedding?.toFixed(2) || '0.15' }} × {{ patch.score_breakdown.embedding_score?.toFixed(2) }}</span>
+                          <span class="contrib-value">= {{ patch.score_breakdown.score_contribution.embedding?.toFixed(3) }}</span>
+                        </div>
+                        <div class="contrib-row" v-if="patch.score_breakdown.score_contribution.reranker">
+                          <span class="contrib-label">Reranker</span>
+                          <span class="contrib-formula">{{ patch.score_breakdown.fusion_weights?.reranker?.toFixed(2) || '0.25' }} × {{ patch.score_breakdown.reranker_score?.toFixed(2) }}</span>
+                          <span class="contrib-value">= {{ patch.score_breakdown.score_contribution.reranker?.toFixed(3) }}</span>
+                        </div>
+                        <div class="contrib-row" v-if="patch.score_breakdown.score_contribution.expert_rule">
+                          <span class="contrib-label">Expert Rule</span>
+                          <span class="contrib-formula">{{ patch.score_breakdown.fusion_weights?.expert_rule?.toFixed(2) || '0.15' }} × {{ patch.score_breakdown.expert_rule_score?.toFixed(2) }}</span>
+                          <span class="contrib-value">= {{ patch.score_breakdown.score_contribution.expert_rule?.toFixed(3) }}</span>
+                        </div>
+                        <div class="contrib-row" v-if="patch.score_breakdown.score_contribution.callstack_match">
+                          <span class="contrib-label">Call Stack</span>
+                          <span class="contrib-formula">{{ patch.score_breakdown.fusion_weights?.callstack_match?.toFixed(2) || '0.10' }} × {{ patch.score_breakdown.callstack_match_score?.toFixed(2) }}</span>
+                          <span class="contrib-value">= {{ patch.score_breakdown.score_contribution.callstack_match?.toFixed(3) }}</span>
+                        </div>
+                        <div class="contrib-row" v-if="patch.score_breakdown.score_contribution.subsystem_match">
+                          <span class="contrib-label">Subsystem</span>
+                          <span class="contrib-formula">{{ patch.score_breakdown.fusion_weights?.subsystem_match?.toFixed(2) || '0.10' }} × {{ patch.score_breakdown.subsystem_match_score?.toFixed(2) }}</span>
+                          <span class="contrib-value">= {{ patch.score_breakdown.score_contribution.subsystem_match?.toFixed(3) }}</span>
+                        </div>
+                        <div class="contrib-row" v-if="patch.score_breakdown.score_contribution.version_match">
+                          <span class="contrib-label">Version</span>
+                          <span class="contrib-formula">{{ patch.score_breakdown.fusion_weights?.version_match?.toFixed(2) || '0.10' }} × {{ patch.score_breakdown.version_match_score?.toFixed(2) }}</span>
+                          <span class="contrib-value">= {{ patch.score_breakdown.score_contribution.version_match?.toFixed(3) }}</span>
+                          <span v-if="patch.score_breakdown.version_penalty" class="version-penalty-badge" :class="patch.score_breakdown.version_penalty < 0 ? 'penalty' : 'bonus'">
+                            {{ patch.score_breakdown.version_penalty < 0 ? '▼' : '▲' }}{{ Math.abs(patch.score_breakdown.version_penalty).toFixed(3) }}
+                          </span>
+                        </div>
+                        <div class="contrib-row total-row">
+                          <span class="contrib-label" style="font-weight: 700;">Total</span>
+                          <span class="contrib-formula">—</span>
+                          <span class="contrib-value" style="font-weight: 700;">= {{ patch.score_breakdown.final_score?.toFixed(3) }}</span>
+                        </div>
+                      </div>
+                    </template>
                   </div>
                 </el-collapse-item>
               </el-collapse>
@@ -518,6 +673,18 @@ Call Trace:
             </div>
           </div>
 
+          <!-- ★ Top1/Top2 差距过小警告 -->
+          <el-alert
+            v-if="scoreGapWarning"
+            title="注意：Top-1 与 Top-2 分数差距极小"
+            type="warning"
+            :closable="false"
+            show-icon
+            class="mt-3"
+          >
+            两者综合评分仅差 {{ scoreGapValue }}，建议同时审查这两个补丁的 Diff 后再做决定。
+          </el-alert>
+
           <el-empty v-if="!currentTask.result.matched_patches?.length" description="未找到匹配的补丁" />
         </el-card>
 
@@ -530,6 +697,23 @@ Call Trace:
             查看历史记录
           </el-button>
         </div>
+
+        <!-- 🔎 检索策略与查询文本 -->
+        <el-collapse class="mt-4" v-if="currentTask.result.retrieval_query">
+          <el-collapse-item title="🔎 检索策略与查询文本">
+            <el-descriptions :column="1" border size="small">
+              <el-descriptions-item label="检索模式">
+                <el-tag size="small" type="primary">{{ currentTask.result.retrieval_mode || 'standard' }}</el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="检索流水线">
+                Phase 1: Recall (Top-100) → Phase 2: Rule Filter → Phase 3: BGE-Reranker-v2 → Phase 4: LLM Judge
+              </el-descriptions-item>
+              <el-descriptions-item label="向量查询文本">
+                <pre style="margin: 0; font-size: 11px; max-height: 200px; overflow-y: auto; background: #f5f5f5; padding: 8px; border-radius: 4px;">{{ currentTask.result.retrieval_query }}</pre>
+              </el-descriptions-item>
+            </el-descriptions>
+          </el-collapse-item>
+        </el-collapse>
 
         <!-- Mock 模式警告 -->
         <el-alert
@@ -545,6 +729,61 @@ Call Trace:
             <el-tag>python scripts/index_all_commits.py --repo-path &lt;linux-repo&gt; --limit 10000</el-tag>
           </template>
         </el-alert>
+
+        <!-- ★ Evidence Coverage — 证据完整度评估 (比赛加分模块) -->
+        <el-card shadow="hover" class="section-card mt-4" v-if="currentTask.result.evidence_coverage">
+          <template #header>
+            <div class="section-header">
+              <span>📋 证据完整度评估 (Evidence Coverage)</span>
+              <el-tag
+                :type="coverageReliabilityTag(currentTask.result.evidence_coverage.reliability)"
+                size="large"
+              >
+                {{ currentTask.result.evidence_coverage.reliability }}
+              </el-tag>
+            </div>
+          </template>
+          <el-progress
+            :percentage="currentTask.result.evidence_coverage.coverage_pct"
+            :stroke-width="12"
+            :color="coverageColor(currentTask.result.evidence_coverage.coverage_pct)"
+            style="margin-bottom: 16px;"
+          >
+            <template #default="{ percentage }">
+              <span style="font-weight: 700; font-size: 14px;">{{ percentage }}%</span>
+            </template>
+          </el-progress>
+          <p class="text-sm text-muted mb-3">{{ currentTask.result.evidence_coverage.reliability_reason }}</p>
+          <el-table
+            :data="currentTask.result.evidence_coverage.items"
+            size="small"
+            stripe
+            style="width: 100%;"
+          >
+            <el-table-column prop="name" label="Evidence Item" width="160" />
+            <el-table-column prop="weight" label="Weight" width="80" align="center">
+              <template #default="{ row }">
+                <el-tag :type="row.weight === 'High' ? 'danger' : row.weight === 'Medium' ? 'warning' : 'info'" size="small">
+                  {{ row.weight }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="status" label="Status" width="100" align="center">
+              <template #default="{ row }">
+                <el-icon v-if="row.status === 'available'" color="#4caf50"><CircleCheck /></el-icon>
+                <el-icon v-else-if="row.status === 'partial'" color="#ff9800"><WarningFilled /></el-icon>
+                <el-icon v-else color="#f44336"><CircleClose /></el-icon>
+                <span style="margin-left: 4px; font-size: 12px;">{{ row.status === 'available' ? '✓' : row.status === 'partial' ? '~' : '✗' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="used" label="Used" width="70" align="center">
+              <template #default="{ row }">
+                <el-tag :type="row.used ? 'success' : 'info'" size="small">{{ row.used ? 'Yes' : 'No' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="detail" label="Detail" min-width="200" show-overflow-tooltip />
+          </el-table>
+        </el-card>
 
         <!-- LLM 分析报告 -->
         <el-card shadow="hover" class="section-card mt-4" v-if="currentTask.result.llm_explanation">
@@ -609,7 +848,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAnalysisStore } from '@/stores/analysis'
 import {
-  bugTypeLabel, shortHash, formatPercent, formatScore, copyToClipboard,
+  bugTypeLabel, shortHash, formatPercent, formatScore, scoreInterpretation, copyToClipboard,
 } from '@/utils/format'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -676,6 +915,32 @@ const confidenceColor = computed(() => {
 const renderedExplanation = computed(() => {
   const text = currentTask.value?.result?.llm_explanation || ''
   return DOMPurify.sanitize(marked(text))
+})
+
+// ★ 关键证据缺失检测
+const hasCallTrace = computed(() => {
+  const ev = currentTask.value?.result?.root_cause?.evidence
+  return !!(ev?.trace_functions?.length)
+})
+const hasKernelVersion = computed(() => {
+  const ev = currentTask.value?.result?.root_cause?.evidence
+  return !!(ev?.kernel_version)
+})
+const hasMissingCriticalEvidence = computed(() => {
+  return !hasCallTrace.value || !hasKernelVersion.value
+})
+
+// ★ Top1/Top2 差距过小警告
+const scoreGapWarning = computed(() => {
+  const patches = currentTask.value?.result?.matched_patches || []
+  if (patches.length < 2) return false
+  const gap = patches[0].relevance_score - patches[1].relevance_score
+  return gap < 0.01
+})
+const scoreGapValue = computed(() => {
+  const patches = currentTask.value?.result?.matched_patches || []
+  if (patches.length < 2) return '0'
+  return (patches[0].relevance_score - patches[1].relevance_score).toFixed(4)
 })
 
 // ── 快速示例 ───────────────────────────────────
@@ -807,6 +1072,23 @@ function scoreColor(score) {
 function compatibilityTagType(compatibility) {
   const map = { 'High': 'success', 'Medium': 'warning', 'Low': 'danger', 'Unknown': 'info' }
   return map[compatibility] || 'info'
+}
+
+/**
+ * 证据完整度可靠性评级对应的 Tag 类型
+ */
+function coverageReliabilityTag(reliability) {
+  const map = { 'High': 'success', 'Medium': 'warning', 'Low': 'danger' }
+  return map[reliability] || 'info'
+}
+
+/**
+ * 证据完整度百分比对应的进度条颜色
+ */
+function coverageColor(pct) {
+  if (pct >= 70) return '#4caf50'
+  if (pct >= 40) return '#ff9800'
+  return '#f44336'
 }
 
 // ── 从 URL 恢复任务 ────────────────────────────
@@ -1197,5 +1479,122 @@ watch(() => route.query.task, (taskId) => {
   display: flex;
   justify-content: center;
   gap: 16px;
+}
+
+/* ── Possible Causes ─────────────────────────── */
+.possible-causes-section {
+  background: rgba(245, 124, 0, 0.04);
+  border: 1px solid rgba(245, 124, 0, 0.12);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+.possible-causes-list {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+.possible-causes-list li {
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--color-text);
+}
+
+/* ── Confidence Breakdown ────────────────────── */
+.confidence-breakdown-section {
+  background: rgba(25, 118, 210, 0.03);
+  border: 1px solid rgba(25, 118, 210, 0.10);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+.confidence-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.confidence-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.confidence-item.total {
+  border-top: 1px dashed var(--color-border);
+  padding-top: 8px;
+  margin-top: 4px;
+}
+.conf-label {
+  width: 130px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+.conf-pct {
+  width: 55px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* ── Score Contribution Table ────────────────── */
+.score-contribution-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-primary-dark);
+  margin-bottom: 8px;
+}
+.contribution-table {
+  background: rgba(0, 0, 0, 0.02);
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+.contrib-row {
+  display: flex;
+  align-items: center;
+  padding: 4px 0;
+  gap: 8px;
+  font-size: 12px;
+}
+.contrib-row.total-row {
+  border-top: 1px dashed var(--color-border);
+  margin-top: 4px;
+  padding-top: 6px;
+}
+.contrib-label {
+  width: 90px;
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+}
+.contrib-formula {
+  flex: 1;
+  color: var(--color-text-muted);
+  font-family: monospace;
+}
+.contrib-value {
+  width: 70px;
+  text-align: right;
+  flex-shrink: 0;
+  color: var(--color-primary);
+  font-family: monospace;
+}
+.version-penalty-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: monospace;
+}
+.version-penalty-badge.penalty {
+  background: rgba(244, 67, 54, 0.12);
+  color: #c62828;
+}
+.version-penalty-badge.bonus {
+  background: rgba(76, 175, 80, 0.12);
+  color: #2e7d32;
 }
 </style>

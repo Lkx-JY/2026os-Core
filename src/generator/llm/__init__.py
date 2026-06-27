@@ -314,11 +314,14 @@ You MUST output ONLY a valid JSON object, no extra text. Format:
         return dict(self._usage_stats)
 
     def _fallback_response(self, prompt: str) -> str:
-        """降级响应 — LLM 不可用时返回"""
+        """降级响应 — LLM 不可用时返回
+
+        ★ 安全: 不返回 prompt 内容 (可能包含 API Key 等敏感信息)
+        """
         return (
             "LLM service unavailable. Using rule-based analysis.\n"
-            f"Query: {prompt[:200]}...\n"
-            "Please check your API key and network connection."
+            "Please check your API key and network connection.\n"
+            "The analysis will continue using expert rules and retrieval metrics."
         )
 
 

@@ -20,6 +20,9 @@ from ..schemas.entities import (
     RootCauseEvidence,
     VersionAnalysis,
     WhyNotExplanation,
+    ConfidenceBreakdown,
+    EvidenceCoverage,
+    EvidenceCoverageItem,
 )
 from ..dependencies import get_config, check_index_ready, verify_api_key
 from ..storage import get_task_store, RedisTaskStore
@@ -153,13 +156,14 @@ async def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
             name="日志解析", status="running",
             started_at=datetime.now(timezone.utc),
         ))
+        safe_request = request.model_dump(exclude={"user_api_key"})
         _save_task(task_id, {
             "task_id": task_id,
             "status": "running",
             "progress": 0.1,
             "created_at": datetime.now(timezone.utc),
             "steps": steps,
-            "request": request,
+            "request": safe_request,
         })
         await asyncio.sleep(0.3)
 
@@ -184,6 +188,16 @@ async def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
                 confidence=0.92,
                 summary="链表并发操作导致的竞态条件问题，可能涉及 list_del/list_add 时的锁保护缺失",
                 key_symptoms=["list_del corruption", "list corruption"],
+                possible_causes=[
+                    "Missing lock protection — 并发访问链表未加锁",
+                    "Lock ordering violation — 不同路径以不同顺序获取锁",
+                    "RCU synchronization missing — 更新 RCU 保护的链表后未调用 synchronize_rcu",
+                ],
+                confidence_breakdown=ConfidenceBreakdown(
+                    rule_match=46.0, fault_address_pattern=13.8,
+                    subsystem_match=9.2, call_trace_evidence=9.2,
+                    register_state=0.0, historical_similarity=13.8,
+                ),
                 evidence=RootCauseEvidence(
                     panic_keyword="List Corruption", fault_address="ffff8800a1b2c3d4",
                     subsystem="list", confidence=0.92,
@@ -199,6 +213,15 @@ async def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
                 confidence=0.88,
                 summary="CPU 软锁定，某个 CPU 在内核态执行时间过长未调度",
                 key_symptoms=["soft lockup", "CPU stuck"],
+                possible_causes=[
+                    "Infinite loop without schedule point — 循环中缺少 cond_resched()",
+                    "Spinlock held too long — 自旋锁持有时间过长",
+                    "Interrupt storm — 中断风暴导致无法调度",
+                ],
+                confidence_breakdown=ConfidenceBreakdown(
+                    rule_match=44.0, fault_address_pattern=0.0, subsystem_match=8.8,
+                    call_trace_evidence=17.6, register_state=0.0, historical_similarity=17.6,
+                ),
                 evidence=RootCauseEvidence(
                     panic_keyword="Soft Lockup", subsystem="scheduler", confidence=0.88,
                     matched_rule_id="R011", matched_rule_name="Soft Lockup",
@@ -213,6 +236,15 @@ async def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
                 confidence=0.85,
                 summary="释放后使用 (UAF) 漏洞，对象被释放后仍被引用",
                 key_symptoms=["use-after-free", "freed memory accessed"],
+                possible_causes=[
+                    "Missing reference count increment — 访问前未增加引用计数",
+                    "RCU grace period violation — rcu_read_unlock 后继续使用保护对象",
+                    "Race condition in free path — 并发路径同时释放同一对象",
+                ],
+                confidence_breakdown=ConfidenceBreakdown(
+                    rule_match=42.5, fault_address_pattern=12.8, subsystem_match=8.5,
+                    call_trace_evidence=8.5, register_state=0.0, historical_similarity=12.8,
+                ),
                 evidence=RootCauseEvidence(
                     panic_keyword="Use-After-Free (KASAN)", fault_address="ffff880123456789",
                     subsystem="mm", confidence=0.85,
@@ -228,6 +260,15 @@ async def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
                 confidence=0.90,
                 summary="空指针解引用，未做有效性检查即访问指针成员",
                 key_symptoms=["NULL pointer dereference", "unable to handle kernel NULL pointer"],
+                possible_causes=[
+                    "Missing NULL check — 函数返回 NULL 后未检查即解引用",
+                    "Object lifecycle problem — 对象已被释放但仍被引用",
+                    "Driver initialization failure — 驱动 probe 失败但指针未置 NULL",
+                ],
+                confidence_breakdown=ConfidenceBreakdown(
+                    rule_match=45.0, fault_address_pattern=13.5, subsystem_match=9.0,
+                    call_trace_evidence=9.0, register_state=0.0, historical_similarity=13.5,
+                ),
                 evidence=RootCauseEvidence(
                     panic_keyword="NULL pointer dereference", fault_address="0000000000000028",
                     subsystem="kernel", confidence=0.90,
@@ -243,6 +284,15 @@ async def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
                 confidence=0.78,
                 summary="内存页错误或内核 BUG 触发，可能与 slab/slub 分配器相关",
                 key_symptoms=["page fault", "BUG:", "kernel panic"],
+                possible_causes=[
+                    "Buffer overflow — 写操作超出分配边界",
+                    "Use-after-free — 已释放内存覆盖了活跃对象",
+                    "Concurrent list modification — 无锁保护的链表并发修改",
+                ],
+                confidence_breakdown=ConfidenceBreakdown(
+                    rule_match=23.4, fault_address_pattern=15.6, subsystem_match=7.8,
+                    call_trace_evidence=7.8, register_state=0.0, historical_similarity=23.4,
+                ),
             )
         else:
             root_cause = RootCauseInfo(
@@ -251,6 +301,14 @@ async def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
                 confidence=0.50,
                 summary="日志缺乏明确特征，需要进一步使用 drgn/vmcore 进行分析",
                 key_symptoms=[],
+                possible_causes=[
+                    "Insufficient evidence — 当前日志信息不足以确定深层原因",
+                    "建议人工审查 vmcore 和完整 dmesg 以获取更多证据",
+                ],
+                confidence_breakdown=ConfidenceBreakdown(
+                    rule_match=15.0, fault_address_pattern=5.0, subsystem_match=5.0,
+                    call_trace_evidence=5.0, register_state=0.0, historical_similarity=20.0,
+                ),
             )
 
         steps[-1].status = "completed"
@@ -295,6 +353,8 @@ async def _simulate_analysis(task_id: str, request: AnalyzeRequest) -> None:
             "matched_patches": matched_patches,
             "steps": steps,
             "llm_explanation": llm_explanation,
+            "retrieval_query": "RootCause: Null Pointer Dereference\nBugType: null pointer\n...",
+            "retrieval_mode": "mock",
             "completed_at": datetime.now(timezone.utc),
         })
 
@@ -332,13 +392,15 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
             name="日志解析", status="running",
             started_at=datetime.now(timezone.utc),
         ))
+        # ★ 安全: 不保存 user_api_key 到任务存储
+        safe_request = request.model_dump(exclude={"user_api_key"})
         _save_task(task_id, {
             "task_id": task_id,
             "status": "running",
             "progress": 0.05,
             "created_at": datetime.now(timezone.utc),
             "steps": steps,
-            "request": request,
+            "request": safe_request,
         })
 
         from ...analyzer.dmesg import parse_dmesg
@@ -358,7 +420,10 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
         ))
         _save_task(task_id, {"progress": 0.15, "steps": steps})
 
-        from ...analyzer.rootcause import get_analyzer, extract_root_cause_evidence
+        from ...analyzer.rootcause import (
+            get_analyzer, extract_root_cause_evidence,
+            compute_possible_causes, compute_confidence_breakdown,
+        )
         analyzer = get_analyzer()
         root_cause_result = analyzer.analyze(feature)
 
@@ -366,13 +431,39 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
         evidence_dict = extract_root_cause_evidence(feature, root_cause_result)
         root_cause_evidence = RootCauseEvidence(**evidence_dict) if evidence_dict else None
 
+        # ★ 两层根因抽象: Bug Type → Possible Causes (含子系统上下文)
+        possible_causes = compute_possible_causes(
+            root_cause_result.bug_type,
+            subsystem=getattr(feature, "subsystem", "unknown"),
+            call_trace=getattr(feature, "call_trace", None),
+        )
+
+        # ★ 置信度拆解: 先占位 (等检索完成后填入 historical_similarity)
+        confidence_breakdown_dict = None
+
         root_cause_info = RootCauseInfo(
             root_cause=root_cause_result.root_cause,
             subsystem=getattr(feature, "subsystem", "unknown"),
             confidence=round(root_cause_result.score, 2),
             summary=root_cause_result.reason,
-            key_symptoms=root_cause_result.causal_chain or [],
-            evidence=root_cause_evidence,  # ★ 挂载证据
+            key_symptoms=[
+                s for s in (root_cause_result.causal_chain or [])
+                if not s.startswith("Expert Rule:")
+                and not s.startswith("Severity:")
+                and not s.startswith("Related Subsystems:")
+                and not s.startswith("Knowledge Base:")
+                and not s.startswith("Lock Issue:")
+                and not s.startswith("Affected Subsystem:")
+                and not s.startswith("Kernel Version:")
+                and not s.startswith("Loaded Modules:")
+                and not s.startswith("Trace Structure:")
+                and not s.startswith("Bug Type:")
+                and not s.startswith("Panic Keyword:")
+                and not s.startswith("Insufficient")
+            ],  # ★ 过滤内部推理标记，仅保留用户可见症状
+            possible_causes=possible_causes,  # ★ 两层根因抽象
+            confidence_breakdown=None,  # ★ 检索完成后填入
+            evidence=root_cause_evidence,
         )
 
         steps[-1].status = "completed"
@@ -419,6 +510,9 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
                 meta = item.metadata or {}
                 diff_preview = _build_diff_preview(meta)
 
+                # ★ 确保所有分数在 [0, 1] 范围内
+                _clamp = lambda v: round(max(0.0, min(1.0, float(v or 0))), 3)
+
                 temp_patches.append({
                     "item": item,
                     "patch": MatchedPatch(
@@ -434,12 +528,25 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
                             files_changed=item.metadata.get("files_changed", []) if item.metadata else [],
                             diff_preview=diff_preview,
                         ),
-                        relevance_score=round(item.final_score, 3),
-                        recall_score=round(item.vector_score, 3),
-                        rerank_score=round(item.reranker_score, 3),
+                        relevance_score=_clamp(item.final_score),
+                        recall_score=_clamp(item.vector_score),
+                        reranker_score=_clamp(item.reranker_score),
                         match_reason=item.rank_reason,
                     ),
                 })
+
+            # ★ Embedding Similarity 批次相对归一化 — 确保不全部显示 1.000
+            # 问题: FAISS 向量未归一化时 IP > 1, _normalize_raw_distance 全部 clamp 到 1.0
+            # 修复: 取批次内 max recall_score, 其余按比例映射, 保证排序区分度
+            raw_recalls = [tp["patch"].recall_score for tp in temp_patches if tp["patch"].recall_score]
+            if raw_recalls:
+                max_recall = max(raw_recalls)
+                if max_recall > 0:
+                    for tp in temp_patches:
+                        if tp["patch"].recall_score is not None:
+                            tp["patch"].recall_score = round(
+                                tp["patch"].recall_score / max_recall, 3
+                            )
 
             # ★ 为每个补丁计算 ScoreBreakdown
             crash_kv = getattr(feature, "kernel_version", "") or ""
@@ -563,6 +670,25 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
         else:
             llm_explanation = None
 
+        # ── ★ 置信度拆解 (检索完成后, 使用 Top-1 的 embedding score) ──
+        top1_emb_score = (
+            matched_patches[0].score_breakdown.embedding_score
+            if matched_patches and matched_patches[0].score_breakdown
+            else 0.0
+        )
+        cb_dict = compute_confidence_breakdown(root_cause_result, feature, top1_emb_score)
+        root_cause_info.confidence_breakdown = ConfidenceBreakdown(**cb_dict)
+
+        # ── ★ 证据完整度评估 (比赛加分模块) ──
+        from ...analyzer.rootcause import compute_evidence_coverage
+        ec_dict = compute_evidence_coverage(feature, root_cause_info, matched_patches)
+        evidence_coverage = EvidenceCoverage(
+            items=[EvidenceCoverageItem(**item) for item in ec_dict["items"]],
+            coverage_pct=ec_dict["coverage_pct"],
+            reliability=ec_dict["reliability"],
+            reliability_reason=ec_dict["reliability_reason"],
+        )
+
         _save_task(task_id, {
             "status": "completed",
             "progress": 1.0,
@@ -571,6 +697,9 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
             "matched_patches": matched_patches,
             "steps": steps,
             "llm_explanation": llm_explanation,
+            "evidence_coverage": evidence_coverage,  # ★ 证据完整度
+            "retrieval_query": getattr(root_cause_result, "retrieval_query", ""),
+            "retrieval_mode": "standard",
             "completed_at": datetime.now(timezone.utc),
         })
 
@@ -654,32 +783,202 @@ def _build_diff_preview(meta: dict) -> str:
 
 
 def _generate_real_explanation(root_cause: RootCauseInfo, patches: list[MatchedPatch]) -> str:
-    """基于规则引擎生成分析解释 (LLM 不可用时的降级)"""
+    """基于规则引擎生成分析解释 (LLM 不可用时的降级)
+
+    增强版: 即使 LLM 不可用，也能生成包含维度贡献、风险提示、
+    Evidence-Aware 声明的有信息量报告。
+    """
     if not patches:
-        return "未能找到匹配的补丁，建议进一步使用 drgn 分析 vmcore。"
+        return (
+            "## 分析结果\n\n"
+            "未能找到匹配的补丁。\n\n"
+            "### 建议\n"
+            "1. 使用 drgn 分析 vmcore 以获取更多证据\n"
+            "2. 扩大搜索范围，检查相关子系统的最新 commit\n"
+            "3. 检查内核邮件列表中是否有相关讨论\n"
+        )
 
     top = patches[0]
-    patch_list = "\n".join(
-        f"{p.rank}. **{p.commit.title}** (相关性: {p.relevance_score:.3f})"
-        for p in patches[:5]
-    )
-    return f"""## 根因分析
 
-根据宕机日志分析，系统发生了 **{root_cause.root_cause}** 类型的故障，
-影响子系统为 `{root_cause.subsystem}`，置信度 {root_cause.confidence:.0%}。
+    # ── (1) Crash Summary ──
+    lines = [
+        "## 🤖 注意: 当前为规则引擎生成的降级报告",
+        "",
+        "LLM 服务未连接，以下分析基于专家规则和检索指标自动生成。",
+        "启用 LLM (Ollama 或 API Key) 可获得更详细的分析报告。",
+        "",
+        "---",
+        "",
+        "## (1) Crash Summary",
+        "",
+        f"**根因类型**: {root_cause.root_cause}",
+        f"**受影响子系统**: `{root_cause.subsystem}`",
+        f"**置信度**: {root_cause.confidence:.0%}",
+        f"**摘要**: {root_cause.summary}",
+    ]
 
-关键症状：{"、".join(root_cause.key_symptoms) if root_cause.key_symptoms else "待确认"}
+    # ── (2) Evidence ──
+    if root_cause.evidence:
+        ev = root_cause.evidence
+        lines += [
+            "",
+            "## (2) 根因证据",
+            "",
+        ]
+        if ev.panic_keyword:
+            lines.append(f"- **Panic 关键词**: {ev.panic_keyword}")
+        if ev.fault_address:
+            lines.append(f"- **故障地址**: `{ev.fault_address}`")
+        if ev.matched_rule_id:
+            lines.append(f"- **匹配规则**: {ev.matched_rule_id} — {ev.matched_rule_name or ''}")
+        if ev.trace_functions:
+            lines.append(f"- **调用栈函数**: {', '.join(ev.trace_functions[:5])}")
 
-## 推荐补丁 (Top-{len(patches)})
+    # ── (3) TopK Patches ──
+    lines += [
+        "",
+        "## (3) 推荐补丁",
+        "",
+        "| Rank | Score | Commit | Subject |",
+        "|------|-------|--------|---------|",
+    ]
+    for p in patches[:5]:
+        lines.append(
+            f"| {p.rank} | {p.relevance_score:.3f} | "
+            f"`{p.commit.commit_id[:12]}` | {p.commit.title[:80]} |"
+        )
 
-{patch_list}
+    # ── (4) Score Composition (从 score_breakdown 获取) ──
+    if top.score_breakdown and top.score_breakdown.score_contribution:
+        contrib = top.score_breakdown.score_contribution
+        lines += [
+            "",
+            "## (4) 评分构成 (Top-1)",
+            "",
+            "| Dimension | Weight | Score | Contribution |",
+            "|-----------|--------|-------|-------------|",
+        ]
+        dims = [
+            ("Embedding", "embedding", top.score_breakdown.embedding_score),
+            ("Reranker", "reranker", top.score_breakdown.reranker_score),
+            ("Expert Rule", "expert_rule", top.score_breakdown.expert_rule_score),
+            ("Call Stack", "callstack_match", top.score_breakdown.callstack_match_score),
+            ("Subsystem", "subsystem_match", top.score_breakdown.subsystem_match_score),
+            ("Version", "version_match", top.score_breakdown.version_match_score),
+            ("LLM Judge", "llm_judge", top.score_breakdown.llm_judge_score),
+        ]
+        for name, key, score in dims:
+            c = contrib.get(key, 0)
+            lines.append(f"| {name} | {top.score_breakdown.fusion_weights.get(key, 0):.0%} | {score:.3f} | {c:.3f} |")
+        lines.append(f"| **Total** | — | — | **{top.score_breakdown.final_score:.3f}** |")
 
-## 修复建议
+    # ── (5) Ranking Reasons ──
+    lines += [
+        "",
+        "## (5) 排序理由",
+        "",
+    ]
+    for p in patches[:3]:
+        lines.append(f"**Top{p.rank}** — {p.commit.title[:60]}...")
+        if p.match_reason:
+            lines.append(f"- 匹配理由: {p.match_reason}")
+        if p.why_not_explanation and p.rank > 1:
+            wn = p.why_not_explanation
+            if wn.different_aspects:
+                lines.append(f"- 与 Top1 的差异: {'; '.join(wn.different_aspects[:3])}")
+            if wn.ranking_reason:
+                lines.append(f"- 排名原因: {wn.ranking_reason}")
+        lines.append("")
 
-1. 优先应用排名第一的补丁 `{top.commit.commit_id[:12]}`，该补丁直接修复了根因问题
-2. 检查子系统 `{root_cause.subsystem}` 中是否存在类似的未修复路径
-3. 建议运行回归测试确认修复效果
-"""
+    # ── (6) Limitations ──
+    missing = []
+    if not (root_cause.evidence and root_cause.evidence.trace_functions):
+        missing.append("Call Trace")
+    if not (root_cause.evidence and root_cause.evidence.kernel_version):
+        missing.append("Kernel Version")
+    if missing:
+        lines += [
+            "## (6) ⚠️ 分析局限性",
+            "",
+            f"以下关键证据缺失: **{', '.join(missing)}**",
+            "",
+            "当前推荐应视为**候选补丁排序**，而非确认修复方案。",
+            f"建议补充 {', '.join(missing)} 信息后重新分析以获得更准确的结果。",
+        ]
+
+    # ── (7) Decision Recommendation ──
+    top1_title = top.commit.title[:80]
+    top2 = patches[1] if len(patches) > 1 else None
+
+    lines += [
+        "",
+        "## (7) 💡 决策建议",
+        "",
+        f"**推荐操作**: 优先应用 Top1 补丁 `{top.commit.commit_id[:12]}` — *{top1_title}*",
+        "",
+        f"**推荐理由**:",
+        f"- 综合评分最高 ({top.relevance_score:.3f})",
+        f"- 匹配了 Expert Rule {root_cause.evidence.matched_rule_id if root_cause.evidence else 'N/A'}",
+        f"- 修复类型 ({top.commit.bug_type or 'N/A'}) 与根因 ({root_cause.root_cause}) 一致",
+    ]
+
+    if top2:
+        gap = top.relevance_score - top2.relevance_score
+        if gap < 0.01:
+            lines.append(f"- ⚠️ 与 Top2 差距极小 ({gap:.4f})，建议同时审查 Top2")
+        else:
+            lines.append(f"- 与 Top2 差距为 {gap:.4f}，Top1 优势明确")
+
+    lines += [
+        "",
+        "### 建议调查流程",
+        "",
+        "| 步骤 | 操作 | 目的 |",
+        "|------|------|------|",
+        "| ① | 审查 Top1 的 Diff | 理解具体修复方式 |",
+        "| ② | 对比补丁修改函数 vs 崩溃调用栈 | 确认修复是否覆盖崩溃路径 |",
+        "| ③ | 检查内核版本兼容性 | 确认补丁可直接 backport |",
+        "| ④ | 在测试环境验证补丁 | 确认无回归问题 |",
+        "| ⑤ | 合入生产内核 | — |",
+    ]
+
+    # ★ 风险提示
+    missing = []
+    if not (root_cause.evidence and root_cause.evidence.trace_functions):
+        missing.append("Call Trace")
+    if not (root_cause.evidence and root_cause.evidence.kernel_version):
+        missing.append("Kernel Version")
+
+    if missing:
+        lines += [
+            "",
+            "### ⚠️ 风险提示",
+            "",
+            f"当前分析缺少以下关键证据: **{', '.join(missing)}**。",
+            f"因此 Top1 推荐应视为**候选补丁排序**中的最佳候选，而非已确认的修复方案。",
+            f"建议补充 {', '.join(missing)} 信息后重新分析，以获得更高可信度的推荐。",
+        ]
+    else:
+        lines += [
+            "",
+            "### ✅ 可信度评估",
+            "",
+            "当前分析的关键证据基本齐全，Top1 推荐可信度较高。",
+            "但仍建议在测试环境验证后再合入生产内核。",
+        ]
+
+    # ── (8) Analysis Scope ──
+    lines += [
+        "",
+        "---",
+        "> **Analysis Scope**",
+        "> 本报告采用 Evidence-Aware 分析策略，所有结论均基于当前输入的宕机日志、",
+        "> 结构化分析结果、检索到的补丁信息及其 Diff 内容生成。",
+        "> 对于日志中未提供或证据不足的信息，报告已明确标记为 **Unknown**",
+        "> 或 **Insufficient Evidence**，未进行推测性补全。",
+    ]
+
+    return "\n".join(lines)
 
 
 def _get_mock_patches(top_k: int, root_cause: RootCauseInfo) -> list[MatchedPatch]:
@@ -741,16 +1040,37 @@ def _get_mock_patches(top_k: int, root_cause: RootCauseInfo) -> list[MatchedPatc
     patches = mock_commits.get(root_cause.root_cause, mock_commits["unknown"])
     results = []
     for i, (commit_id, title, message, highlight, subsystem, bug_type, files) in enumerate(patches[:top_k]):
-        # ScoreBreakdown — 模拟多维分数
+        # ScoreBreakdown — 模拟多维分数 (含维度贡献和版本惩罚)
+        W = {"embedding": 0.15, "reranker": 0.25, "expert_rule": 0.15,
+             "callstack_match": 0.10, "subsystem_match": 0.10,
+             "version_match": 0.10, "llm_judge": 0.15}
+        emb = round(0.88 - i * 0.06, 4)
+        rrk = round(0.92 - i * 0.06, 4)
+        exp = round(0.95 - i * 0.10, 4)
+        call = round(0.90 - i * 0.20, 4)
+        subsys = round(1.0 - i * 0.15, 4)
+        ver = round(0.85 - i * 0.05, 4)
+        llm = round(0.88 - i * 0.08, 4)
+        final = round(
+            emb * W["embedding"] + rrk * W["reranker"] + exp * W["expert_rule"]
+            + call * W["callstack_match"] + subsys * W["subsystem_match"]
+            + ver * W["version_match"] + llm * W["llm_judge"], 4
+        )
         sb = ScoreBreakdown(
-            embedding_score=round(0.88 - i * 0.06, 4),
-            reranker_score=round(0.92 - i * 0.06, 4),
-            expert_rule_score=round(0.95 - i * 0.10, 4),
-            callstack_match_score=round(0.90 - i * 0.20, 4),
-            subsystem_match_score=round(1.0 - i * 0.15, 4),
-            version_match_score=round(0.85 - i * 0.05, 4),
-            llm_judge_score=round(0.88 - i * 0.08, 4),
-            final_score=round(0.95 - i * 0.08, 4),
+            embedding_score=emb, reranker_score=rrk, expert_rule_score=exp,
+            callstack_match_score=call, subsystem_match_score=subsys,
+            version_match_score=ver, llm_judge_score=llm,
+            final_score=final,
+            score_contribution={
+                "embedding": round(emb * W["embedding"], 4),
+                "reranker": round(rrk * W["reranker"], 4),
+                "expert_rule": round(exp * W["expert_rule"], 4),
+                "callstack_match": round(call * W["callstack_match"], 4),
+                "subsystem_match": round(subsys * W["subsystem_match"], 4),
+                "version_match": round(ver * W["version_match"], 4),
+                "llm_judge": round(llm * W["llm_judge"], 4),
+            },
+            version_penalty=round((ver - 1.0) * W["version_match"], 4),
         )
 
         # VersionAnalysis — 模拟版本对比
@@ -795,7 +1115,7 @@ def _get_mock_patches(top_k: int, root_cause: RootCauseInfo) -> list[MatchedPatc
             ),
             relevance_score=round(0.95 - i * 0.08, 2),
             recall_score=round(0.85 - i * 0.05, 2),
-            rerank_score=round(0.92 - i * 0.06, 2),
+            reranker_score=round(0.92 - i * 0.06, 2),
             match_reason=f"该补丁通过 {highlight} 操作修复了与当前崩溃日志匹配的 {root_cause.root_cause} 问题",
             diff_highlights=[f"+ {highlight}()"],
             score_breakdown=sb,
@@ -855,12 +1175,14 @@ async def create_analysis(
     task_id = f"task_{uuid.uuid4().hex[:12]}"
     created_at = datetime.now(timezone.utc)
 
+    # ★ 安全: 不保存 user_api_key
+    safe_request = request.model_dump(exclude={"user_api_key"})
     _save_task(task_id, {
         "task_id": task_id,
         "status": "running",
         "progress": 0.0,
         "created_at": created_at,
-        "request": request,
+        "request": safe_request,
     })
 
     # ★ 自动选择: 向量库有数据 → 真实 Pipeline, 否则 → Mock 降级
@@ -908,6 +1230,9 @@ async def get_analysis_status(task_id: str) -> TaskStatusResponse:
             matched_patches=task.get("matched_patches", []),
             analysis_steps=task.get("steps", []),
             llm_explanation=task.get("llm_explanation"),
+            evidence_coverage=task.get("evidence_coverage"),
+            retrieval_query=task.get("retrieval_query"),
+            retrieval_mode=task.get("retrieval_mode", "standard"),
             created_at=created_at or datetime.now(timezone.utc),
             completed_at=completed_at,
             elapsed_ms=int(

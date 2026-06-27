@@ -3,7 +3,7 @@
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
-from .entities import RootCauseInfo, MatchedPatch, CommitInfo, AnalysisStep
+from .entities import RootCauseInfo, MatchedPatch, CommitInfo, AnalysisStep, EvidenceCoverage
 
 
 class AnalyzeResponse(BaseModel):
@@ -26,6 +26,18 @@ class AnalyzeResponse(BaseModel):
     analysis_mode: str = Field(
         default="real",
         description="real | mock — 标识本次分析使用的是真实RAG Pipeline还是模拟数据"
+    )
+    # ★ 证据完整度评估 (比赛加分模块)
+    evidence_coverage: Optional[EvidenceCoverage] = Field(
+        default=None,
+        description="证据完整度评估 — 展示哪些证据可用、哪些缺失、分析可靠性评级"
+    )
+    # ★ 检索策略透明化
+    retrieval_query: Optional[str] = Field(
+        default=None, description="用于向量检索的查询文本"
+    )
+    retrieval_mode: Optional[str] = Field(
+        default="standard", description="检索模式: fast / standard / deep"
     )
     created_at: Optional[datetime] = Field(default=None)
     completed_at: Optional[datetime] = Field(default=None)

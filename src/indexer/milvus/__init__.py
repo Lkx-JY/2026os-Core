@@ -55,6 +55,28 @@ COLLECTION_SCHEMA_FIELDS = [
 FILTERABLE_FIELDS = ["subsystem", "bug_type", "date", "commit_hash"]
 
 
+def _normalize_raw_distance(raw: float) -> float:
+    """将 FAISS/Milvus 返回的原始内积值归一化到 [0.0, 1.0]
+
+    FAISS IndexFlatIP.search() 返回的是原始内积值 (≈余弦相似度),
+    已按降序排列 (最高内积 = 最相似)。
+
+    归一化策略:
+    - 内积 ≥ 0: 直接使用原始值 (保留 FAISS 真实输出), clamp 到 1.0
+    - 内积 < 0: 表示语义不相关, 映射到 0.0 (对于内核 Crash↔Commit 匹配,
+      同领域的向量内积通常 ≥ 0; 负值一律视为不相关)
+    - 极端值 (>1, 未归一化向量): clamp 到 1.0
+
+    这是最透明的转换 — 正值直接反映 FAISS 原始内积, 不做额外加工。
+    """
+    if raw > 1.0:
+        return 1.0
+    elif raw >= 0.0:
+        return raw
+    else:
+        return 0.0
+
+
 @dataclass
 class SearchResult:
     """向量检索结果"""
@@ -68,16 +90,40 @@ class SearchResult:
         return len(self.ids)
 
     def to_dict_list(self) -> List[Dict[str, Any]]:
-        """转换为字典列表，便于下游使用"""
+        """转换为字典列表，便于下游使用
+
+        ★ 分数归一化策略:
+        - 归一化向量: IP ∈ [-1, 1], 直接透传正值, 负值→0
+        - 未归一化向量: IP 可能 > 1, 使用批次相对归一化保留排序区分度
+          (例如 IP=[20, 15, 10] → 归一化为 [1.0, 0.75, 0.5])
+        """
+        # 检测是否需要批次相对归一化 (所有正值 > 1 → 向量未归一化)
+        positive_dists = [d for d in self.distances if d > 0] if self.distances else []
+        batch_max = max(positive_dists) if positive_dists else 1.0
+        needs_relative = batch_max > 1.0
+
         results = []
         for i in range(len(self.ids)):
+            raw = self.distances[i] if i < len(self.distances) else 0.0
+
+            if needs_relative and raw > 0:
+                # 批次相对归一化: 保留排序，最大值→1.0，其余按比例
+                normalized = round(raw / batch_max, 4)
+            else:
+                # 标准归一化: 归一化向量的余弦相似度
+                normalized = _normalize_raw_distance(raw)
+
             item = {
                 "id": self.ids[i],
                 "distance": self.distances[i] if i < len(self.distances) else 0.0,
-                "score": 1.0 - self.distances[i] if i < len(self.distances) else 0.0,
+                "score": normalized,
             }
             if i < len(self.metadata):
+                # ★ 先合并 metadata，再覆盖 score — 防止 metadata 中的旧 score 值
+                #    覆盖掉 to_dict_list() 归一化后的真实分数
+                old_score = item["score"]
                 item.update(self.metadata[i])
+                item["score"] = old_score  # 保证 score 始终是归一化后的值
             results.append(item)
         return results
 

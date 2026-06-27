@@ -443,6 +443,8 @@ def fuse_scores(
     - Reranker 分数 (0.4): 交叉编码器捕获了 query-doc 交互语义，权重较高
     - LLM Judge (0.4): 大模型的因果推理最接近人类专家判断，权重最高
 
+    ★ 所有输入分数在融合前被归一化到 [0, 1], 输出也被 clamp 到 [0, 1].
+
     Args:
         vector_scores: 向量相似度列表
         reranker_scores: Reranker 交叉编码分数列表
@@ -450,7 +452,7 @@ def fuse_scores(
         weights: (vector_weight, reranker_weight, llm_weight)，None时从配置读取
 
     Returns:
-        综合分数列表
+        综合分数列表 (均在 [0, 1] 范围内)
     """
     if weights is None:
         weights = _load_fusion_weights()
@@ -460,11 +462,18 @@ def fuse_scores(
     max_len = max(len(vector_scores), len(reranker_scores), len(llm_scores))
 
     for i in range(max_len):
-        v = vector_scores[i] if i < len(vector_scores) else 0.5
-        r = reranker_scores[i] if i < len(reranker_scores) else 0.5
-        l = llm_scores[i] if i < len(llm_scores) else 0.5
+        raw_v = vector_scores[i] if i < len(vector_scores) else 0.5
+        raw_r = reranker_scores[i] if i < len(reranker_scores) else 0.5
+        raw_l = llm_scores[i] if i < len(llm_scores) else 0.5
 
-        fused.append(w_vec * v + w_rerank * r + w_llm * l)
+        # ★ 归一化: 确保所有输入分数在 [0, 1] 范围内
+        v = _clamp_01(raw_v)
+        r = _clamp_01(raw_r)
+        l = _clamp_01(raw_l)
+
+        # ★ 加权融合 → clamp 到 [0, 1]
+        final = w_vec * v + w_rerank * r + w_llm * l
+        fused.append(_clamp_01(final))
 
     return fused
 
@@ -518,12 +527,27 @@ def rerank_candidates(
 
     n = len(candidates)
 
-    # Step 1: 提取文档文本和向量分数
+    # Step 1: 提取文档文本和向量分数 (★ 批次相对归一化, 保留排序区分度)
     documents = []
     if vector_scores is None:
         vector_scores = []
         for cand in candidates:
-            vector_scores.append(cand.get("score", 0.5))
+            raw_score = cand.get("_boosted_score", cand.get("score", 0.5))
+            vector_scores.append(raw_score)
+
+    # ★ 批次相对归一化: 确保所有分数在 [0,1] 且保留相对差异
+    # 解决 _boosted_score > 1.0 (安全加权/版本加权) 导致全部 clamp 到 1.0 的问题
+    if vector_scores:
+        positive_scores = [s for s in vector_scores if s > 0]
+        if positive_scores:
+            batch_max = max(positive_scores)
+            if batch_max > 0:
+                if batch_max > 1.0 or batch_max < 0.01:
+                    # 需要重新映射: max → 1.0, 其余按比例
+                    vector_scores = [round(s / batch_max, 4) for s in vector_scores]
+                else:
+                    # 已在 [0,1] 范围，安全 clamp
+                    vector_scores = [_clamp_01(s) for s in vector_scores]
 
     for cand in candidates:
         subject = cand.get("subject", "")[:200]
@@ -554,7 +578,7 @@ def rerank_candidates(
     indexed = list(enumerate(final_scores))
     indexed.sort(key=lambda x: -x[1])
 
-    # Step 6: 构造结果
+    # Step 6: 构造结果 (★ 所有分数归一化到 [0, 1])
     ranked_items = []
     for rank, (orig_idx, fused_score) in enumerate(indexed, 1):
         cand = candidates[orig_idx]
@@ -564,10 +588,10 @@ def rerank_candidates(
             subject=cand.get("subject", ""),
             subsystem=cand.get("subsystem", "unknown"),
             bug_type=cand.get("bug_type", "unknown"),
-            vector_score=vector_scores[orig_idx] if orig_idx < len(vector_scores) else 0.0,
-            reranker_score=reranker_scores[orig_idx] if orig_idx < len(reranker_scores) else 0.0,
-            llm_judge_score=llm_scores[orig_idx] if orig_idx < len(llm_scores) else 0.0,
-            final_score=fused_score,
+            vector_score=_clamp_01(vector_scores[orig_idx] if orig_idx < len(vector_scores) else 0.0),
+            reranker_score=_clamp_01(reranker_scores[orig_idx] if orig_idx < len(reranker_scores) else 0.0),
+            llm_judge_score=_clamp_01(llm_scores[orig_idx] if orig_idx < len(llm_scores) else 0.0),
+            final_score=_clamp_01(fused_score),
             rank_reason=_generate_rank_reason(
                 cand, fused_score,
                 reranker_scores[orig_idx] if orig_idx < len(reranker_scores) else 0.5,
@@ -694,7 +718,10 @@ def compute_score_breakdown(
     )
 
     # ── 4. 版本匹配度 (从 metadata 中获取) ──
-    version_match_score = _clamp_01(item.metadata.get("_version_weight", 1.0))
+    # _version_weight: 0.70 (penalty) ~ 1.30 (bonus), 1.0 = neutral
+    # 保留完整范围以体现版本的正面/负面影响
+    raw_version_weight = item.metadata.get("_version_weight", 1.0)
+    version_match_score = max(0.0, min(1.5, raw_version_weight))  # cap at 1.5 for extremes
 
     # ── 5. 综合分数 ──────────────────────────
     W = EXPLAINABLE_FUSION_WEIGHTS
@@ -709,6 +736,21 @@ def compute_score_breakdown(
     )
     final = _clamp_01(final)
 
+    # ── ★ 计算每维度的实际贡献值 (weight × score) ──
+    contribution = {
+        "embedding": round(vec_score * W["embedding"], 4),
+        "reranker": round(rerank_score * W["reranker"], 4),
+        "expert_rule": round(expert_rule_score * W["expert_rule"], 4),
+        "callstack_match": round(callstack_match_score * W["callstack_match"], 4),
+        "subsystem_match": round(subsystem_match_score * W["subsystem_match"], 4),
+        "version_match": round(version_match_score * W["version_match"], 4),
+        "llm_judge": round(llm_score * W["llm_judge"], 4),
+    }
+
+    # ── ★ 版本惩罚/奖励 (从 final_score 中体现的版本影响) ──
+    # version_penalty > 0: 版本匹配加权; < 0: 版本不匹配降权
+    version_penalty = round((version_match_score - 1.0) * W["version_match"], 4)
+
     return {
         "embedding_score": round(vec_score, 4),
         "reranker_score": round(rerank_score, 4),
@@ -718,6 +760,8 @@ def compute_score_breakdown(
         "version_match_score": round(version_match_score, 4),
         "llm_judge_score": round(llm_score, 4),
         "final_score": round(final, 4),
+        "score_contribution": contribution,
+        "version_penalty": version_penalty,
         "fusion_weights": dict(EXPLAINABLE_FUSION_WEIGHTS),
     }
 
@@ -728,19 +772,30 @@ def _clamp_01(value: float) -> float:
 
 
 def _normalize_score(score: float) -> float:
-    """将原始向量分数归一化到 0.0~1.0
+    """将向量分数归一化到 0.0~1.0
 
-    FAISS 返回 L2 距离 (越低越好, 可以为 >1.0)
-    BGE-M3 返回余弦相似度或点积
-
-    策略:
-    - score ≤ 1.0: 假定已是相似度, 直接 clamp
-    - score > 1.0: 假定是 L2 距离, 用 1/(1+distance) 转换
+    FAISS IndexFlatIP 的内积值已在 to_dict_list() 中归一化到 [0, 1]。
+    此函数处理后续可能出现的异常值:
+    - score ∈ [0, 1]: 直接使用 (已归一化)
+    - score ∈ (1, 2]: filter boost 导致的轻微溢出, clamp 到 1.0
+    - score > 2 或 < 0: 未归一化的异常值, 使用 sigmoid 压缩
     """
-    if score <= 1.0:
-        return _clamp_01(score)
-    # L2 距离 → 相似度
-    return _clamp_01(1.0 / (1.0 + score))
+    if 0.0 <= score <= 1.0:
+        return score
+    elif 1.0 < score <= 2.0:
+        return 1.0
+    elif score > 2.0:
+        import math
+        try:
+            return _clamp_01(1.0 / (1.0 + math.exp(-score + 2.0)))
+        except (OverflowError, ValueError):
+            return 1.0
+    else:  # score < 0
+        import math
+        try:
+            return _clamp_01(1.0 / (1.0 + math.exp(-score - 1.0)))
+        except (OverflowError, ValueError):
+            return 0.0
 
 
 def _compute_expert_rule_score(
@@ -882,34 +937,48 @@ def generate_why_not_explanations(
 
         # ── 3. 比较分数差距 ────────────────────
         score_gap = top1.final_score - item.final_score
-        if score_gap > 0.15:
-            different.append(
-                f"综合评分差距较大 (差 {score_gap:.0%})，各维度均弱于 Top-1"
-            )
-        elif score_gap > 0.05:
-            different.append(
-                f"综合评分存在差距 (差 {score_gap:.0%})"
-            )
+        different.append(
+            f"综合评分: Top1={top1.final_score:.3f} vs Top{i+1}={item.final_score:.3f} (差 {score_gap:.4f})"
+        )
 
-        # ── 4. 比较 Reranker 分数 ──────────────
-        if item.reranker_score < top1.reranker_score - 0.10:
+        # ── 4. 比较 Embedding 分数 ──────────────
+        if top1.vector_score != item.vector_score:
             different.append(
-                "Reranker 语义重排分数显著低于 Top-1，语义层面关联度不足"
+                f"Embedding 相似度: Top1={top1.vector_score:.3f} > Top{i+1}={item.vector_score:.3f}"
             )
+        else:
+            same.append("Embedding 相似度相同，差异来自后续排序阶段")
 
-        # ── 5. 版本维度 ────────────────────────
+        # ── 5. 比较 Reranker 分数 ──────────────
+        rerank_gap = top1.reranker_score - item.reranker_score
+        different.append(
+            f"Cross Encoder 重排: Top1={top1.reranker_score:.3f} vs Top{i+1}={item.reranker_score:.3f} (差 {rerank_gap:.4f})"
+        )
+
+        # ── 6. 版本维度 ────────────────────────
         item_vw = item.metadata.get("_version_weight", 1.0)
         top1_vw = top1.metadata.get("_version_weight", 1.0)
-        if item_vw < 1.0 and top1_vw >= 1.0:
+        if abs(item_vw - top1_vw) > 0.01:
+            if item_vw < top1_vw:
+                different.append(
+                    f"版本兼容性较低 (权重 {item_vw:.2f} vs Top1 {top1_vw:.2f})"
+                )
+            else:
+                same.append(f"版本兼容性相当 (权重 {item_vw:.2f} vs Top1 {top1_vw:.2f})")
+        elif item_vw != 1.0:
+            different.append(f"版本匹配权重 {item_vw:.2f} (偏离中性值 1.0)")
+
+        # ── 7. 确保差异列表不为空 ──────────────────
+        if not different:
             different.append(
-                f"版本匹配权重降低 ({item_vw:.0%})，补丁版本与崩溃内核存在兼容性差异"
+                f"各项指标均略低于 Top1，综合 {len(same)} 个相同维度后排名第 {item.rank}"
             )
 
-        # ── 6. 生成总结 ────────────────────────
-        if different:
-            ranking_reason = f"综合 {len(different)} 个差异因素，排名第 {item.rank}"
-        else:
-            ranking_reason = f"与 Top-1 特征相近，但因综合分数略低排名第 {item.rank}"
+        # ── 8. 生成总结 ────────────────────────
+        ranking_reason = (
+            f"综合 {len(different)} 个差异维度 vs {len(same)} 个相同维度，"
+            f"排名第 {item.rank}（综合分差 {score_gap:.4f}）"
+        )
 
         explanations.append({
             "compared_to_rank": 1,

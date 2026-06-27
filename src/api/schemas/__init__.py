@@ -18,6 +18,13 @@ from .entities import (
     SubsystemInfo,
     BugTypeInfo,
     AnalysisStep,
+    ScoreBreakdown,
+    RootCauseEvidence,
+    VersionAnalysis,
+    WhyNotExplanation,
+    ConfidenceBreakdown,
+    EvidenceCoverage,
+    EvidenceCoverageItem,
 )
 
 __all__ = [
@@ -39,4 +46,11 @@ __all__ = [
     "SubsystemInfo",
     "BugTypeInfo",
     "AnalysisStep",
+    "ScoreBreakdown",
+    "RootCauseEvidence",
+    "VersionAnalysis",
+    "WhyNotExplanation",
+    "ConfidenceBreakdown",
+    "EvidenceCoverage",
+    "EvidenceCoverageItem",
 ]
