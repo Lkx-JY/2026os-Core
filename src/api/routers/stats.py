@@ -18,12 +18,6 @@ router = APIRouter(prefix="/stats", tags=["Stats"])
 # 服务启动时间
 _START_TIME = time.time()
 
-# 模拟统计计数器 (内存内, 用于未持久化的分析计数)
-_mock_stats = {
-    "total_analyses": 0,
-}
-
-
 # 统计数据内存缓存 (启动时由 lifespan 预热，避免每次解析 1.7GB JSON)
 _stats_cache: Optional[dict] = None
 
@@ -99,53 +93,30 @@ async def get_stats(config: dict = Depends(get_config)) -> StatsResponse:
     """
     real = _get_real_stats()
 
+    # ★ 获取当前数据源名称
+    from ..dependencies import resolve_data_source
+    ds = resolve_data_source()
+    dataset_name = ds[1] if ds else "none"
+
     has_real_data = real.get("has_real_data", False)
-    if has_real_data:
-        logger.info(f"使用真实统计数据: {real['total_commits']} 条向量")
-        subsystems = _get_real_subsystems()
-        bug_types = _get_real_bug_types()
-        total_commits = real["total_commits"]
-        vector_db_size = real["vector_db_size"]
-    else:
-        logger.info("向量库为空, 使用预估统计")
-        total_commits = 1_250_000
-        vector_db_size = 1_250_000
-        subsystems = [
-            {"name": "kernel", "count": 180_000},
-            {"name": "drivers", "count": 620_000},
-            {"name": "net", "count": 95_000},
-            {"name": "fs", "count": 110_000},
-            {"name": "mm", "count": 75_000},
-            {"name": "arch", "count": 120_000},
-            {"name": "others", "count": 50_000},
-        ]
-        bug_types = [
-            {"name": "race_condition", "count": 28000, "description": "竞态条件"},
-            {"name": "use_after_free", "count": 15000, "description": "释放后使用"},
-            {"name": "null_pointer_dereference", "count": 22000, "description": "空指针解引用"},
-            {"name": "memory_corruption", "count": 12000, "description": "内存损坏"},
-            {"name": "deadlock", "count": 8000, "description": "死锁"},
-            {"name": "soft_lockup", "count": 5000, "description": "软锁定"},
-        ]
+    subsystems = _get_real_subsystems() if has_real_data else []
+    bug_types = _get_real_bug_types() if has_real_data else []
+    total_commits = real.get("total_commits", 0)
+    vector_db_size = real.get("vector_db_size", 0)
 
     return StatsResponse(
         total_commits=total_commits,
-        total_analyses=_mock_stats["total_analyses"],
-        subsystems=subsystems or [
-            {"name": "kernel", "count": 0},
-        ],
-        bug_types=bug_types or [
-            {"name": "unknown", "count": 0, "description": "待索引"},
-        ],
+        total_analyses=0,
+        subsystems=subsystems,
+        bug_types=bug_types,
         vector_db_size=vector_db_size,
-        analysis_mode="real" if has_real_data else "mock",
+        analysis_mode=dataset_name,
         uptime_seconds=time.time() - _START_TIME,
-        avg_analysis_ms=1850.5,
+        avg_analysis_ms=0,
     )
 
 
 @router.post("/increment-analysis")
 async def increment_analysis_count() -> dict:
     """增加分析计数 (内部使用)"""
-    _mock_stats["total_analyses"] += 1
-    return {"total_analyses": _mock_stats["total_analyses"]}
+    return {"total_analyses": 0}

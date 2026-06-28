@@ -123,7 +123,15 @@ def _warmup_models():
         logger.warning(f"  ⚠ Embedding 预热失败: {e}")
 
     # 2. 预热 FAISS 向量库 (单例，首次调用加载索引)
+    # ★ 自动检测数据源: data_full → data
     try:
+        from ..api.dependencies import resolve_data_source
+        ds = resolve_data_source()
+        if ds:
+            logger.info(f"  ✓ 数据源: {ds[1]} (path={ds[0]})")
+        else:
+            logger.warning("  ⚠ 未检测到向量库数据源 (data_full/ 和 data/ 均无 FAISS 索引)")
+
         from ..indexer.milvus import get_milvus_client
         client = get_milvus_client()
         count = client.count()

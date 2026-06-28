@@ -687,20 +687,15 @@ Call Trace:
           </el-collapse-item>
         </el-collapse>
 
-        <!-- Mock 模式警告 -->
+        <!-- ★ 数据源提示 -->
         <el-alert
-          v-if="currentTask.result?.analysis_mode === 'mock'"
-          title="⚠️ 演示模式 — 向量库未索引提交数据，当前返回模拟结果"
-          type="warning"
-          :closable="false"
+          v-if="currentTask.result?.analysis_mode === 'data'"
+          title="📦 当前使用 Demo 数据集 (data)，召回范围有限。建议下载全量数据集以获得更准确的结果。"
+          type="info"
+          :closable="true"
           show-icon
           class="mt-4"
-        >
-          <template #default>
-            请先运行索引脚本:
-            <el-tag>python scripts/index_all_commits.py --repo-path &lt;linux-repo&gt; --limit 10000</el-tag>
-          </template>
-        </el-alert>
+        />
 
         <!-- ★ Evidence Coverage — 证据完整度评估 (比赛加分模块) -->
         <el-card shadow="hover" class="section-card mt-4" v-if="currentTask.result.evidence_coverage">

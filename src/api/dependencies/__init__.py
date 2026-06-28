@@ -63,6 +63,43 @@ class PaginationParams:
 
 
 # ============================================================================
+# 数据源自动检测 (data_full → data → None)
+# ============================================================================
+
+import os as _os
+
+# 候选数据目录（按优先级排序）
+_DATA_CANDIDATE_DIRS = [
+    ("data_full", "data_full"),
+    ("data", "data"),
+]
+
+
+def resolve_data_source() -> tuple[str, str] | None:
+    """自动检测可用的向量库数据源
+
+    检测顺序:
+    1. data_full/faiss_index.index → ("data_full/faiss_index", "data_full")
+    2. data/faiss_index.index       → ("data/faiss_index", "data")
+
+    Returns:
+        (faiss_index_path, dataset_name) — dataset_name 为 "data_full" 或 "data"
+        若都不可用返回 None
+    """
+    for dir_name, dataset_name in _DATA_CANDIDATE_DIRS:
+        index_path = f"{dir_name}/faiss_index"
+        index_file = f"{index_path}.index"
+        if _os.path.isfile(index_file):
+            logger.info(f"✓ 检测到数据源: {dataset_name} ({index_file})")
+            return index_path, dataset_name
+        else:
+            logger.debug(f"数据源 {dataset_name} 不可用: {index_file} 不存在")
+
+    logger.warning("未检测到任何向量库数据源 (data_full/ 和 data/ 均无 FAISS 索引)")
+    return None
+
+
+# ============================================================================
 # 向量库状态检查 (analyze 和 search 路由共用)
 # ============================================================================
 
@@ -70,7 +107,12 @@ def check_index_ready() -> bool:
     """检查向量库是否已初始化并有数据，同时验证嵌入模型是否就绪
 
     供 analyze 和 search 路由共用，避免代码重复。
+    数据源自动检测: data_full → data → False
     """
+    # ★ 先检测数据源是否存在
+    if resolve_data_source() is None:
+        return False
+
     try:
         from ...indexer.milvus import get_milvus_client
         from ...indexer.embedding import get_encoder
@@ -115,4 +157,5 @@ __all__ = [
     "PaginationParams",
     "get_analysis_service",
     "check_index_ready",
+    "resolve_data_source",
 ]

@@ -1780,9 +1780,10 @@ def compute_possible_causes(
     # ★ 基于调用栈添加特定函数上下文
     if call_trace:
         func_names = [f.split('+')[0] if '+' in f else f for f in call_trace[:3]]
+        func_list = ', '.join(func_names)
         causes.append(
-            f"调用栈涉及: {', '.join(func_names)}，"
-            f"建议重点审查这些函数及其调用路径中的指针解引用和锁保护"
+            f"崩溃调用栈经过 {func_list}，"
+            f"该路径可能存在指针有效性检查缺失或并发访问保护不足"
         )
 
     return causes

@@ -78,8 +78,11 @@ export FAISS_INDEX_PATH=./data_full/faiss_index
 python -m src.main
 
 # 切回 Demo 模式
-unset FAISS_INDEX_PATH
+FAISS_INDEX_PATH=data/faiss_index python -m src.main
+#或者先 export 再启动：
+export FAISS_INDEX_PATH=data/faiss_index
 python -m src.main
+
 ```
 
 启动日志中会显示当前使用的数据量：

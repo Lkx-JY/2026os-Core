@@ -77,99 +77,6 @@ def _get_facets_real(results: list[dict]) -> dict:
     return {"subsystems": subsystems, "bug_types": bug_types}
 
 
-# ── Mock 数据 (向量库为空时的降级) ─────────────────────────────────
-
-_MOCK_COMMITS: list[dict] = [
-    {
-        "commit_id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f67890",
-        "title": "list: fix race condition in list_del",
-        "message": "Add missing spin_lock protection in list_del operation to prevent concurrent modification corruption.",
-        "author": "Peter Zijlstra",
-        "date": "2025-09-15",
-        "subsystem": "kernel",
-        "bug_type": "race_condition",
-        "files_changed": ["kernel/sched/list.c", "include/linux/list.h"],
-        "diff_preview": "+ spin_lock_irqsave(&list->lock, flags);\n  __list_del_entry(entry);\n+ spin_unlock_irqrestore(&list->lock, flags);",
-        "fix_tags": ["Fixes: abc123", "Cc: stable@vger.kernel.org"],
-    },
-    {
-        "commit_id": "b2c3d4e5f6a7b2c3d4e5f6a7b2c3d4e5f6789012",
-        "title": "mm: fix use-after-free in kmem_cache_free",
-        "message": "Resolve UAF vulnerability by adding proper RCU grace period before freeing slab objects.",
-        "author": "Andrew Morton",
-        "date": "2025-09-10",
-        "subsystem": "mm",
-        "bug_type": "use_after_free",
-        "files_changed": ["mm/slub.c", "mm/slab.c"],
-        "diff_preview": "+ synchronize_rcu();\n  kmem_cache_free(cache, obj);\n+ /* Ensure no concurrent readers */",
-        "fix_tags": ["Fixes: def456", "Cc: stable@vger.kernel.org"],
-    },
-    {
-        "commit_id": "c3d4e5f6a7b8c3d4e5f6a7b8c3d4e5f67890123",
-        "title": "net: fix NULL pointer dereference in napi_poll",
-        "message": "Add null check before accessing napi->dev to prevent crash when device is detached.",
-        "author": "David S. Miller",
-        "date": "2025-09-05",
-        "subsystem": "net",
-        "bug_type": "null_pointer_dereference",
-        "files_changed": ["net/core/dev.c"],
-        "diff_preview": "+ if (!napi->dev)\n+     return budget;\n  work = napi->dev->rx_handler(budget);",
-        "fix_tags": ["Cc: stable@vger.kernel.org"],
-    },
-    {
-        "commit_id": "d4e5f6a7b8c9d4e5f6a7b8c9d4e5f678901234",
-        "title": "sched: fix soft lockup in CFS scheduler",
-        "message": "Add cond_resched() call in the load balancing loop to prevent CPU soft lockup.",
-        "author": "Ingo Molnar",
-        "date": "2025-09-01",
-        "subsystem": "kernel",
-        "bug_type": "soft_lockup",
-        "files_changed": ["kernel/sched/fair.c"],
-        "diff_preview": "+ cond_resched();\n  update_rq_clock(rq);",
-        "fix_tags": ["Fixes: ghi789"],
-    },
-    {
-        "commit_id": "e5f6a7b8c9d0e5f6a7b8c9d0e5f6789012345",
-        "title": "fs: fix deadlock in writeback",
-        "message": "Fix circular locking dependency between i_mutex and journal lock in ext4 writeback path.",
-        "author": "Theodore Ts'o",
-        "date": "2025-08-28",
-        "subsystem": "fs",
-        "bug_type": "deadlock",
-        "files_changed": ["fs/ext4/inode.c", "fs/ext4/ext4_jbd2.c"],
-        "diff_preview": "- mutex_lock(&inode->i_mutex);\n+ if (!mutex_trylock(&inode->i_mutex)) {\n+     /* reorder locking */\n+     mutex_lock(&journal->j_lock);\n+     mutex_lock(&inode->i_mutex);\n+ }",
-        "fix_tags": ["Fixes: jkl012"],
-    },
-    {
-        "commit_id": "f6a7b8c9d0e1f6a7b8c9d0e1f6a78901234567",
-        "title": "locking: add memory barrier in rcu_dereference",
-        "message": "Add smp_read_barrier_depends() to prevent CPU speculative execution from bypassing RCU read protection.",
-        "author": "Paul E. McKenney",
-        "date": "2025-08-20",
-        "subsystem": "kernel",
-        "bug_type": "race_condition",
-        "files_changed": ["include/linux/rcupdate.h"],
-        "diff_preview": "+ smp_read_barrier_depends();\n  p = rcu_dereference(ptr);",
-        "fix_tags": ["Cc: stable@vger.kernel.org"],
-    },
-    {
-        "commit_id": "a7b8c9d0e1f2a7b8c9d0e1f2a789012345678",
-        "title": "drivers: fix slab out-of-bounds in nvme driver",
-        "message": "Fix off-by-one buffer overflow in NVMe command submission path.",
-        "author": "Jens Axboe",
-        "date": "2025-08-15",
-        "subsystem": "drivers",
-        "bug_type": "memory_corruption",
-        "files_changed": ["drivers/nvme/host/core.c"],
-        "diff_preview": "- memcpy(dst, src, cmd->len);\n+ memcpy(dst, src, min(cmd->len, MAX_CMD_SIZE));",
-        "fix_tags": ["Fixes: mno345"],
-    },
-]
-
-# Mock 数据索引
-_COMMIT_MAP: dict[str, dict] = {c["commit_id"]: c for c in _MOCK_COMMITS}
-
-
 @router.post("", response_model=SearchResponse)
 async def search_commits(
     request: SearchRequest,
@@ -184,47 +91,30 @@ async def search_commits(
     - 按内核版本过滤
     - 分页
 
-    ★ 自动检测: 向量库有数据时使用真实语义检索, 否则回退 Mock
+    ★ 数据源自动检测: data_full → data → 空结果
     """
-    using_real = _is_index_ready()
-    if using_real:
-        logger.info(f"使用真实向量检索: query='{request.query}'")
-        # ★ 真实向量检索 (基于 page_size 计算召回量，最小 100)
-        effective_top_k = max(request.page_size * 5, 100)
-        all_results = _search_real(
+    if not _is_index_ready():
+        logger.warning(f"向量库无数据, 搜索返回空结果: query='{request.query}'")
+        return SearchResponse(
             query=request.query,
-            top_k=effective_top_k,
-            subsystem=request.subsystem,
-            bug_type=request.bug_type,
+            total=0,
+            page=request.page,
+            page_size=request.page_size,
+            results=[],
+            analysis_mode="none",
+            facets={"subsystems": {}, "bug_types": {}},
         )
-        facets = _get_facets_real(all_results)
-    else:
-        logger.info(f"使用 Mock 检索: query='{request.query}'")
-        # Mock 降级
-        query_lower = request.query.lower()
-        all_results = []
-        for commit in _MOCK_COMMITS:
-            text_match = (
-                query_lower in commit["title"].lower()
-                or query_lower in commit["message"].lower()
-                or any(query_lower in f.lower() for f in commit["files_changed"])
-                or any(query_lower in t.lower() for t in commit.get("fix_tags", []))
-            )
-            if not text_match:
-                continue
-            if request.subsystem and commit["subsystem"] != request.subsystem:
-                continue
-            if request.bug_type and commit.get("bug_type") != request.bug_type:
-                continue
-            all_results.append(commit)
 
-        subsystems = {}
-        bug_types = {}
-        for c in all_results:
-            subsystems[c["subsystem"]] = subsystems.get(c["subsystem"], 0) + 1
-            if c.get("bug_type"):
-                bug_types[c["bug_type"]] = bug_types.get(c["bug_type"], 0) + 1
-        facets = {"subsystems": subsystems, "bug_types": bug_types}
+    logger.info(f"使用真实向量检索: query='{request.query}'")
+    # ★ 真实向量检索 (基于 page_size 计算召回量，最小 100)
+    effective_top_k = max(request.page_size * 5, 100)
+    all_results = _search_real(
+        query=request.query,
+        top_k=effective_top_k,
+        subsystem=request.subsystem,
+        bug_type=request.bug_type,
+    )
+    facets = _get_facets_real(all_results)
 
     total = len(all_results)
 
@@ -249,13 +139,18 @@ async def search_commits(
             fix_tags=r.get("fix_tags", []),
         ))
 
+    # ★ 获取当前数据源名称
+    from ..dependencies import resolve_data_source
+    ds = resolve_data_source()
+    dataset_name = ds[1] if ds else "none"
+
     return SearchResponse(
         query=request.query,
         total=total,
         page=request.page,
         page_size=request.page_size,
         results=commit_infos,
-        analysis_mode="real" if using_real else "mock",
+        analysis_mode=dataset_name,
         facets=facets,
     )
 
@@ -306,21 +201,8 @@ async def get_commit_detail(commit_id: str) -> CommitDetailResponse:
                 )
         raise HTTPException(status_code=404, detail=f"Commit {commit_id} 不存在于向量库中")
 
-    # Mock 降级
-    commit = _COMMIT_MAP.get(commit_id)
-    if not commit:
-        raise HTTPException(status_code=404, detail=f"Commit {commit_id} 不存在")
-
-    related = []
-    for fix_tag in commit.get("fix_tags", []):
-        for c in _MOCK_COMMITS:
-            if c["commit_id"] in fix_tag or fix_tag in c["commit_id"]:
-                related.append(CommitInfo(**c))
-
-    return CommitDetailResponse(
-        commit=CommitInfo(**commit),
-        related_commits=related[:5],
-    )
+    # 向量库无数据时返回 404
+    raise HTTPException(status_code=404, detail=f"Commit {commit_id} 不存在 (向量库无数据)")
 
 
 @router.get("/subsystems/list", response_model=list[str])
@@ -331,8 +213,7 @@ async def list_subsystems() -> list[str]:
         subs = get_all_subsystems()
         if subs:
             return sorted(subs)
-    subsystems = sorted(set(c["subsystem"] for c in _MOCK_COMMITS))
-    return subsystems
+    return []
 
 
 @router.get("/bug-types/list", response_model=list[str])
@@ -343,7 +224,4 @@ async def list_bug_types() -> list[str]:
         types = get_all_bug_types()
         if types:
             return sorted(types)
-    bug_types = sorted(set(
-        c["bug_type"] for c in _MOCK_COMMITS if c.get("bug_type")
-    ))
-    return bug_types
+    return []

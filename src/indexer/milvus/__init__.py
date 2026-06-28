@@ -1010,16 +1010,26 @@ class MilvusClient:
         """解析使用哪个后端
 
         优先级 (★ 数据可用性优先):
-        1. 环境变量 MILVUS_FORCE_FAISS=1 → 强制 FAISS
-        2. FAISS 已有数据 → 直接使用 FAISS (避免空的 Milvus Lite 干扰)
-        3. Milvus Lite 有数据 → 使用 Milvus Lite
-        4. Milvus Docker 有数据 → 使用 Milvus Docker
-        5. 以上都无 → 回退 FAISS (空索引，待填充)
+        1. 环境变量 FAISS_INDEX_PATH → 使用指定路径
+        2. 环境变量 MILVUS_FORCE_FAISS=1 → 强制 FAISS
+        3. data_full/faiss_index 已有数据 → 使用 data_full
+        4. data/faiss_index 已有数据 → 使用 data
+        5. FAISS 已有数据 (默认路径) → 直接使用 FAISS
+        6. Milvus Lite 有数据 → 使用 Milvus Lite
+        7. Milvus Docker 有数据 → 使用 Milvus Docker
+        8. 以上都无 → 回退 FAISS (空索引，待填充)
         """
         # 环境变量 FAISS_INDEX_PATH 可覆盖默认路径 (用于本地完整数据测试)
         env_faiss_path = os.environ.get("FAISS_INDEX_PATH", "").strip()
         if env_faiss_path:
             self.faiss_index_path = env_faiss_path
+        else:
+            # ★ 自动检测数据源: data_full → data
+            from ...api.dependencies import resolve_data_source
+            detected = resolve_data_source()
+            if detected:
+                self.faiss_index_path = detected[0]
+                print(f"检测到数据源: {detected[1]} (path={detected[0]})")
 
         force_faiss = os.environ.get("MILVUS_FORCE_FAISS", "").strip() in ("1", "true", "yes")
 

@@ -543,10 +543,10 @@ def rerank_candidates(
             batch_max = max(positive_scores)
             if batch_max > 0:
                 if batch_max > 1.0 or batch_max < 0.01:
-                    # 需要重新映射: max → 1.0, 其余按比例
-                    vector_scores = [round(s / batch_max, 4) for s in vector_scores]
+                    # 需要重新映射: 保留相对差异, 封顶 0.99 防止虚假满分
+                    vector_scores = [round(min(0.99, s / batch_max), 4) for s in vector_scores]
                 else:
-                    # 已在 [0,1] 范围，安全 clamp
+                    # 已在合理范围，安全 clamp
                     vector_scores = [_clamp_01(s) for s in vector_scores]
 
     for cand in candidates:
@@ -683,6 +683,9 @@ def compute_score_breakdown(
     将综合分数 final_score 分解为 7 个独立评分维度，
     面向前端 ScoreBreakdown 面板。
 
+    ★ 关键设计: final_score 直接使用 reranker pipeline 产出的 item.final_score，
+    7 个维度仅用于展示各个子维度的独立得分，不再重新加权求和。
+
     Args:
         item: 排序后的候选补丁
         crash_subsystem: 崩溃所属子系统
@@ -696,8 +699,6 @@ def compute_score_breakdown(
     """
 
     # ── 0. 归一化原始分数到 0.0~1.0 ──────────
-    # FAISS 返回 L2 距离 (越低越好), Reranker 返回 0~1 相似度
-    # 将所有分数归一化到 0.0~1.0 的相似度空间
     vec_score = _normalize_score(item.vector_score)
     rerank_score = _clamp_01(item.reranker_score)
     llm_score = _clamp_01(item.llm_judge_score)
@@ -717,25 +718,17 @@ def compute_score_breakdown(
         item.subsystem, crash_subsystem
     )
 
-    # ── 4. 版本匹配度 (从 metadata 中获取) ──
-    # _version_weight: 0.70 (penalty) ~ 1.30 (bonus), 1.0 = neutral
-    raw_version_weight = item.metadata.get("_version_weight", 1.0)
-    version_match_score = max(0.0, min(2.0, raw_version_weight))
-
-    # ── 5. 综合分数 ──────────────────────────
-    W = EXPLAINABLE_FUSION_WEIGHTS
-    final = (
-        vec_score * W["embedding"]
-        + rerank_score * W["reranker"]
-        + expert_rule_score * W["expert_rule"]
-        + callstack_match_score * W["callstack_match"]
-        + subsystem_match_score * W["subsystem_match"]
-        + version_match_score * W["version_match"]
-        + llm_score * W["llm_judge"]
+    # ── 4. 版本匹配度 (基于实际版本距离计算，不使用 _version_weight) ──
+    version_match_score = _compute_version_match_score(
+        item.metadata, crash_kernel_version
     )
-    final = _clamp_01(final)
+
+    # ── 5. ★ final_score 直接使用 reranker pipeline 的 item.final_score ──
+    # 7 维度仅用于展示各维度独立得分，不重新加权求和
+    final = _clamp_01(item.final_score)
 
     # ── ★ 计算每维度的实际贡献值 (weight × score) ──
+    W = EXPLAINABLE_FUSION_WEIGHTS
     contribution = {
         "embedding": round(vec_score * W["embedding"], 4),
         "reranker": round(rerank_score * W["reranker"], 4),
@@ -746,8 +739,7 @@ def compute_score_breakdown(
         "llm_judge": round(llm_score * W["llm_judge"], 4),
     }
 
-    # ── ★ 版本惩罚/奖励 (从 final_score 中体现的版本影响) ──
-    # version_penalty > 0: 版本匹配加权; < 0: 版本不匹配降权
+    # ── ★ 版本惩罚/奖励 ──
     version_penalty = round((version_match_score - 1.0) * W["version_match"], 4)
 
     return {
@@ -882,6 +874,79 @@ def _compute_subsystem_match_score(
         return 0.55
 
     return 0.20
+
+
+def _compute_version_match_score(
+    patch_metadata: Dict[str, Any],
+    crash_kernel_version: str,
+) -> float:
+    """基于实际版本距离计算版本匹配度
+
+    与 filter_by_version 的 _version_weight 不同，此函数基于实际
+    版本距离映射到 0~1 的匹配度分数，与 compute_version_analysis 的
+    兼容性评级保持一致。
+
+    Args:
+        patch_metadata: 补丁元数据 (含 kernel_version_major/minor)
+        crash_kernel_version: 崩溃内核版本字符串 (如 "6.8.0-rc1")
+
+    Returns:
+        版本匹配度 (0.0 ~ 1.0):
+        - Same Version → 1.00
+        - 1-2 releases ahead → 0.90
+        - 3-5 releases ahead → 0.70
+        - >5 releases ahead → 0.50
+        - Behind (patch older) → 0.65
+        - Unknown → 0.50 (中性)
+    """
+    # 解析补丁版本
+    patch_major = patch_metadata.get("kernel_version_major")
+    patch_minor = patch_metadata.get("kernel_version_minor")
+
+    if patch_major is None or patch_minor is None:
+        kv = patch_metadata.get("kernel_version", "")
+        if kv:
+            kv_parts = kv.split(".")
+            try:
+                patch_major = int(kv_parts[0])
+                patch_minor = int(kv_parts[1]) if len(kv_parts) > 1 else 0
+            except (ValueError, IndexError):
+                pass
+
+    # 解析崩溃版本
+    crash_major = 0
+    crash_minor = 0
+    crash_valid = False
+    if crash_kernel_version:
+        crash_parts = crash_kernel_version.split(".")
+        try:
+            crash_major = int(crash_parts[0])
+            crash_minor = int(crash_parts[1]) if len(crash_parts) > 1 else 0
+            if 2 <= crash_major <= 7:
+                crash_valid = True
+        except (ValueError, IndexError):
+            pass
+
+    # 无法判断时返回中性分
+    if not crash_valid or patch_major is None or patch_minor is None:
+        return 0.50
+
+    # 计算版本距离: (patch - crash) * 1000 + (minor diff)
+    distance = (patch_major - crash_major) * 1000 + (patch_minor - crash_minor)
+
+    if distance == 0:
+        return 1.00      # 同一版本
+    elif 1 <= distance <= 2:
+        return 0.90      # 略新，大概率可直接 backport
+    elif 3 <= distance <= 5:
+        return 0.70      # 差距较大，需确认 API 兼容性
+    elif distance > 5:
+        return 0.50      # 跨多个版本，需人工审查
+    elif distance < 0:
+        # 补丁版本比崩溃内核旧 — 可能是原始修复
+        return 0.65      # 可能是原始提交，需确认后续补充修复
+    else:
+        return 0.50
 
 
 def generate_why_not_explanations(
