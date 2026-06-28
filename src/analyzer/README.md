@@ -47,7 +47,7 @@ src/analyzer/
          ▼
 ┌─────────────────┐
 │  Phase 2: 根因抽象 │  Layer 1: 28 条专家规则精确匹配 (0.60~0.95)
-│  (rootcause)      │  Layer 2: 调用栈结构分析 (4 类 × 89 个函数)
+│  (rootcause)      │  Layer 2: 调用栈结构分析 (4 类 × 122 个函数)
 │                   │  Layer 3: Bug 类型通用抽象 (0.40~0.55)
 │                   │  Layer 4: Panic 关键词兜底 (0.40~0.50)
 │                   │  + LLM 协同推理 (llm_rootcause, 可选)
@@ -97,7 +97,7 @@ src/analyzer/
 
 **核心功能**:
 - `abstract_root_cause(feature) → RootCauseResult`: 主入口
-- `analyze_call_trace_structure(trace_lines) → Dict`: 调用栈结构分析 (4 类 × 89 个函数)
+- `analyze_call_trace_structure(trace_lines) → Dict`: 调用栈结构分析 (4 类 × 122 个函数)
 - `infer_fix_patterns(bug_type, trace_analysis, panic_msg) → Dict`: 修复模式推断 (5 种修复类型)
 - `build_retrieval_query(feature, ...) → str`: 检索查询构造 (多层语义融合)
 - `list_all_rules() → List[Dict]`: 列出所有已注册的专家规则

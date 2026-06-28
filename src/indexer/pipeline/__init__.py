@@ -10,10 +10,11 @@
 - 批量处理: 分批编码 + 分批插入，支持百万级数据
 
 设计要点:
-- ★ 对称 Root Cause 分析: 离线侧 Commit 也通过 RootCauseAnalyzer (28规则+4层分析)，
-  生成与在线侧 retrieval_query 结构对称的 embedding 文本，消除语义鸿沟
+- ★ 对称 Root Cause 分析: 离线侧 Commit 通过 CommitRootCauseBuilder (3层轻量分析:
+  BUG_TEMPLATE 查表 + DIFF_RULES 规则匹配 + 置信度评估)，生成与在线侧
+  retrieval_query 结构对称的 embedding 文本，消除语义鸿沟
 - embedding_text 语义增强拼接: 融合 RootCause + BugType + Subsystem + FixPattern + KeyFunctions + CausalChain
-- 使用 RootCauseResult.retrieval_query 作为在线查询文本和离线 embedding 文本的统一格式
+- 在线侧使用 RootCauseResult.retrieval_query 作为查询文本，离线侧使用对称格式的 embedding 文本
 - 批处理流水线: encode_batch → insert_batch，控制内存峰值
 """
 
@@ -156,6 +157,11 @@ def _build_commit_root_cause_embedding_text_legacy(commit) -> str:
 
     保留此函数用于 A/B 对比和回退。新代码请使用 _build_commit_root_cause_embedding_text。
     """
+    from ...analyzer.rootcause import abstract_root_cause
+
+    feature = _commit_to_crash_feature(commit)
+    result = abstract_root_cause(feature)
+    return prepare_rootcause_embedding_text(result)
 
 def prepare_commit_embedding_text(commit, use_root_cause: bool = True,
                                   use_commit_builder: bool = True) -> str:
@@ -163,15 +169,17 @@ def prepare_commit_embedding_text(commit, use_root_cause: bool = True,
 
     支持两种模式:
     - use_root_cause=True (★ 推荐, 默认):
-      通过 RootCauseAnalyzer (28规则+4层分析) 生成与在线侧 retrieval_query
-      结构对称的 embedding 文本，消除"宕机描述"与"补丁描述"之间的语义鸿沟。
+      通过 CommitRootCauseBuilder (3层轻量分析) 或 RootCauseAnalyzer (4层完整分析)
+      生成与在线侧 retrieval_query 结构对称的 embedding 文本，消除"宕机描述"与"补丁描述"之间的语义鸿沟。
+      默认 use_commit_builder=True，使用 CommitRootCauseBuilder (3-5ms/commit)；
+      设置 use_commit_builder=False 可切换到 RootCauseAnalyzer (~100ms/commit，保留用于 A/B 对比)。
 
     - use_root_cause=False (降级, 兼容旧版):
       使用简单结构化标签拼接 (Title/Subsystem/BugType/LockAdded/RCUFix/RefcountFix)。
 
     设计原则 (参考赛题指导):
     - 不只是 message + diff 的简单拼接
-    - 对称 Root Cause 分析: 在线侧和离线侧使用相同的分析引擎
+    - 对称 Root Cause 分析: 在线侧和离线侧输出结构对称的 embedding 文本
     - 保留修复语义: lock_added/rcu_fix/refcount_fix 映射为自然语言 FixPattern
     - diff 内容截断保留关键修复逻辑
 

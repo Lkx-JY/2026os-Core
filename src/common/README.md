@@ -19,7 +19,7 @@
 ```
 src/common/
 ├── __init__.py                # 模块入口 — 统一导出所有公共 API
-├── exceptions/__init__.py     # ★ 层次化异常类体系 (6 大类 20+ 异常)
+├── exceptions/__init__.py     # ★ 层次化异常类体系 (7 大类 21 种异常)
 ├── logging/__init__.py        # ★ 统一日志系统 (loguru)
 ├── utils/__init__.py          # ★ 工具函数集合 (30+ 函数)
 ├── config.py                  # ★ 统一配置中心 (环境变量 + YAML)

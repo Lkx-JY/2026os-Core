@@ -91,7 +91,8 @@ Linux Kernel Git Repo (145 万+ commits)
                 ▼
 ┌─────────────────────────────────────────┐
 │ ★ 对称 Root Cause 分析                   │
-│ 对 Commit 使用与宕机日志相同的分析引擎     │
+│ CommitRootCauseBuilder 轻量引擎 (3层)    │
+│ 生成与在线侧结构对称的 embedding 文本     │
 │ → 消除 "现象 vs 补丁" 语义鸿沟            │
 └───────────────┬─────────────────────────┘
                 ▼
@@ -149,20 +150,21 @@ Linux Kernel Git Repo (145 万+ commits)
 ```text
 离线侧 (Commit)                          在线侧 (宕机日志)
      │                                         │
-CommitInfo → CrashFeature 映射           dmesg → CrashFeature
+CommitInfo (已提取的结构化特征)          dmesg → CrashFeature
      │                                         │
      ▼                                         ▼
-同一个 RootCauseAnalyzer.analyze()   同一个 RootCauseAnalyzer.analyze()
+CommitRootCauseBuilder.build()         RootCauseAnalyzer.analyze()
+(3层轻量: 模板查表+Diff规则+置信度)     (4层: 专家规则+调用栈+类型抽象+兜底)
      │                                         │
      ▼                                         ▼
-build_retrieval_query()              build_retrieval_query()
-(6层语义融合)                        (6层语义融合)
+build_commit_embedding_text()          build_retrieval_query()
+(与 retrieval_query 结构对称)          (6层语义融合)
      │                                         │
      ▼                                         ▼
   BGE-M3 编码 → Milvus             BGE-M3 编码 → Milvus Search
 ```
 
-两端使用完全相同的分析引擎，确保检索时 query 和 document 在相同的语义空间中。
+两端输出**结构对称的 embedding 文本**（相同的字段格式和语义层次），确保检索时 query 和 document 在相同的语义空间中。离线侧使用轻量级 CommitRootCauseBuilder (3-5ms/commit) 以支持百万级数据索引，在线侧使用完整 RootCauseAnalyzer (~100ms) 以保证分析精度。
 
 ### 3.2 四阶段检索架构
 
@@ -329,7 +331,7 @@ cp .env.example .env
 cd frontend && npm install && cd ..
 ```
 
-### 6.3 索引 Linux 内核 Commit
+### 6.3 索引 Linux 内核 Commit(已经提供，只需按照scripts目录下部署文档操作；也可选择自己构建向量数据库，但构建过程时间较长，建议直接下载存储在123云盘上的向量数据库)
 
 ```bash
 # 确认 Linux 内核仓库路径
@@ -353,7 +355,7 @@ python scripts/index_all_commits.py \
   --resume
 ```
 
-### 6.4 启动服务
+### 6.4 启动服务（详细见docs/DEPLOY.md）
 
 ```bash
 # 方式 1: 一键启动脚本 (后端 + 前端)
