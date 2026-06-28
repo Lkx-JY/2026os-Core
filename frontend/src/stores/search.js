@@ -20,6 +20,7 @@ export const useSearchStore = defineStore('search', () => {
   const filterSubsystem = ref(null)
   const filterBugType = ref(null)
   const filterVersion = ref('')
+  const retrievalMode = ref('fast')  // ★ 检索模式: fast | standard | deep
 
   // 子系统 / Bug 类型选项 (用于下拉框)
   const subsystemOptions = ref([])
@@ -48,6 +49,7 @@ export const useSearchStore = defineStore('search', () => {
         kernel_version: filterVersion.value || undefined,
         page: page.value,
         page_size: pageSize.value,
+        retrieval_mode: retrievalMode.value,
       })
       results.value = data.results
       total.value = data.total
@@ -105,7 +107,7 @@ export const useSearchStore = defineStore('search', () => {
 
   return {
     query, results, total, page, pageSize, loading, facets,
-    filterSubsystem, filterBugType, filterVersion,
+    filterSubsystem, filterBugType, filterVersion, retrievalMode,
     subsystemOptions, bugTypeOptions, commitCache,
     totalPages, hasResults,
     doSearch, getCommitDetail, loadFilterOptions, setPage, resetFilters,

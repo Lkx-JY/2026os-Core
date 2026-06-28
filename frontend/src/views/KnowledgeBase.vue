@@ -63,6 +63,18 @@
           />
         </el-select>
 
+        <!-- ★ 检索模式 -->
+        <el-select
+          v-model="searchStore.retrievalMode"
+          placeholder="检索模式"
+          @change="doSearch"
+          style="width: 140px;"
+        >
+          <el-option label="⚡ 快速 (<100ms)" value="fast" />
+          <el-option label="🎯 标准 (<1s)" value="standard" />
+          <el-option label="🧠 深度 (2-10s)" value="deep" />
+        </el-select>
+
         <el-button text @click="searchStore.resetFilters(); doSearch()">
           清除过滤
         </el-button>

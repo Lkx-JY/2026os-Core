@@ -20,7 +20,8 @@ _is_index_ready = check_index_ready
 
 def _search_real(query: str, top_k: int = 50,
                  subsystem: Optional[str] = None,
-                 bug_type: Optional[str] = None) -> list[dict]:
+                 bug_type: Optional[str] = None,
+                 retrieval_mode: str = "fast") -> list[dict]:
     """使用真实向量检索"""
     from ...retriever.pipeline import quick_search
     from ...indexer.milvus import get_milvus_client
@@ -44,7 +45,7 @@ def _search_real(query: str, top_k: int = 50,
         candidates = result.to_dict_list()
         return candidates
 
-    result = quick_search(query, top_k=top_k, mode="fast")
+    result = quick_search(query, top_k=top_k, mode=retrieval_mode)
     items = []
     for item in result.ranked_items:
         meta = item.metadata or {}
@@ -113,6 +114,7 @@ async def search_commits(
         top_k=effective_top_k,
         subsystem=request.subsystem,
         bug_type=request.bug_type,
+        retrieval_mode=request.retrieval_mode,
     )
     facets = _get_facets_real(all_results)
 

@@ -36,6 +36,11 @@ class AnalyzeRequest(BaseModel):
         default=None,
         description="自定义模型名称（可选，默认 deepseek-chat）",
     )
+    retrieval_mode: str = Field(
+        default="standard",
+        pattern=r"^(fast|standard|deep)$",
+        description="检索模式: fast(仅召回+过滤, <100ms) / standard(召回+过滤+重排, <1s) / deep(全四阶段+LLM评分, 2-10s)",
+    )
 
 
 class SearchRequest(BaseModel):
@@ -46,6 +51,11 @@ class SearchRequest(BaseModel):
     kernel_version: Optional[str] = Field(default=None, description="按内核版本过滤")
     page: int = Field(default=1, ge=1, description="页码")
     page_size: int = Field(default=20, ge=1, le=100, description="每页条数")
+    retrieval_mode: str = Field(
+        default="fast",
+        pattern=r"^(fast|standard|deep)$",
+        description="检索模式: fast(<100ms) / standard(<1s) / deep(2-10s)",
+    )
 
 
 class BatchAnalyzeRequest(BaseModel):

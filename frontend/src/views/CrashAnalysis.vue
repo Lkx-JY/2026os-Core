@@ -66,6 +66,24 @@ Call Trace:
           </el-checkbox>
         </el-form-item>
 
+        <!-- ★ 检索模式选择 -->
+        <el-form-item label="🔍 检索模式">
+          <el-radio-group v-model="form.retrieval_mode">
+            <el-radio value="fast">
+              <span style="font-weight: 500;">⚡ 快速</span>
+              <span class="text-muted text-sm ml-1">仅召回+过滤 (&lt;100ms)</span>
+            </el-radio>
+            <el-radio value="standard" class="ml-3">
+              <span style="font-weight: 500;">🎯 标准</span>
+              <span class="text-muted text-sm ml-1">召回+过滤+重排 (&lt;1s)</span>
+            </el-radio>
+            <el-radio value="deep" class="ml-3">
+              <span style="font-weight: 500;">🧠 深度</span>
+              <span class="text-muted text-sm ml-1">全四阶段+LLM评分 (2-10s)</span>
+            </el-radio>
+          </el-radio-group>
+        </el-form-item>
+
         <!-- ★ 大模型配置 — 用户选择付费方式 -->
         <el-form-item v-if="form.enable_llm_explanation" label="🤖 大模型配置">
           <el-card shadow="never" class="llm-config-card">
@@ -832,6 +850,7 @@ const form = reactive({
   kernel_version: '',
   top_k: 5,
   enable_llm_explanation: true,
+  retrieval_mode: 'standard',  // ★ 检索模式: fast | standard | deep
   // LLM 配置 — 用户决定付费方式
   llm_mode: 'free',        // 'free' | 'own_key'
   user_api_key: '',
@@ -946,6 +965,7 @@ async function submitAnalysis() {
       user_api_key: form.llm_mode === 'own_key' ? form.user_api_key : undefined,
       user_api_base: form.llm_mode === 'own_key' ? form.user_api_base || undefined : undefined,
       user_api_model: form.llm_mode === 'own_key' ? form.user_api_model || undefined : undefined,
+      retrieval_mode: form.retrieval_mode,
     })
 
     router.replace({ path: '/analyze', query: { task: taskId } })
@@ -964,6 +984,7 @@ function resetForm() {
   form.kernel_version = ''
   form.top_k = 5
   form.enable_llm_explanation = true
+  form.retrieval_mode = 'standard'
   form.llm_mode = 'free'
   form.user_api_key = ''
   form.user_api_base = ''

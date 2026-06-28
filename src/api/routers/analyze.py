@@ -235,7 +235,7 @@ def _run_real_analysis(task_id: str, request: AnalyzeRequest) -> None:
         diagnosis = run_online_diagnosis(
             dmesg_content=request.log_content,
             use_llm=request.enable_llm_explanation,
-            retrieval_mode="standard",
+            retrieval_mode=request.retrieval_mode,
             top_k=100,
         )
 
