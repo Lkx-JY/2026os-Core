@@ -278,7 +278,7 @@ project3136859-388917/
 │   └── docker-compose.yml          # App + Milvus + Redis
 ├── tests/                          # 测试
 │   ├── conftest.py                 # Pytest fixtures
-│   ├── fixtures/                   # 10 种宕机日志样本
+│   ├── fixtures/                   # 9 种宕机日志样本
 │   ├── test_integration.py         # 端到端集成测试
 │   ├── test_analyzer.py            # 分析器单元测试
 │   ├── test_collector.py           # 采集器单元测试
