@@ -201,7 +201,7 @@ build_commit_embedding_text()          build_retrieval_query()
 | **向量数据库** | Milvus Lite + FAISS | 双后端，自动降级 |
 | **Git 挖掘** | PyDriller | 流式遍历，O(1) 内存 |
 | **内核调试** | drgn | vmcore 解析，内核对象提取 |
-| **前端** | Vue 3 + Element Plus + ECharts | 暗色专业主题 |
+| **前端** | Vue 3 + Element Plus + ECharts  |
 | **状态管理** | Pinia | 前端分析/搜索状态 |
 | **基础设施** | Docker Compose | App + Milvus + Redis 一键部署 |
 | **缓存** | Redis | 任务状态 + 查询缓存 |
