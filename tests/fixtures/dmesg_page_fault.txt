@@ -1,4 +1,4 @@
-BUG: unable to handle page fault for address: ffff888deadbeef0
+BUG: unable to handle kernel NULL pointer dereference at 0000000000000028
 #PF: supervisor write access in kernel mode
 #PF: error_code(0x0002) - not-present page
 PGD 0 P4D 0
@@ -9,15 +9,16 @@ Workqueue: events vmstat_update
 RIP: 0010:__mod_node_page_state+0x45/0xc0
 Code: 48 8b 47 08 48 8b 4f 10 48 01 c1 48 89 4f 08 48 8b 47 18 48 85 c0 74 0a 48 8b 57 20 48 01 c2 48 89 57 20 <48> 8b 47 00 48 85 c0 74 0a 48 8b 4f 28 48 01 c1
 RSP: 0018:ffffa2d1c0d0fc38 EFLAGS: 00010282
-RAX: ffff888deadbeef0 RBX: 0000000000000000 RCX: 0000000000000001
+RAX: ffff888102a4e000 RBX: 0000000000000000 RCX: 0000000000000001
 RDX: 0000000000000000 RSI: 0000000000000002 RDI: ffff8881a2b3c000
 RBP: ffffa2d1c0d0fc70 R08: 0000000000000000 R09: 0000000000000000
 R10: 0000000000000000 R11: 0000000000000000 R12: 0000000000000001
 R13: ffff8881a2b3c000 R14: 0000000000000002 R15: ffff8881a2b3c000
 FS:  0000000000000000(0000) GS:ffff8883fbd00000(0000) knlGS:0000000000000000
 CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
-CR2: ffff888deadbeef0 CR3: 0000000102a50000 CR4: 0000000000350ee0
-Call Trace:
+CR2: ffff888102a4e000 CR3: 0000000102a50000 CR4: 0000000000350ee0
+Modules linked in: nf_conntrack nfnetlink cfg80211 rfkill
+Stack:
  <TASK>
  mod_node_page_state+0x65/0xc0
  __mod_lruvec_page_state+0x8c/0xf0
@@ -30,6 +31,15 @@ Call Trace:
  exc_page_fault+0x7b/0x170
  asm_exc_page_fault+0x27/0x30
  </TASK>
-CR2: ffff888deadbeef0
+
+Mem-Info:
+active_anon:245608 inactive_anon:6192 isolated_anon:0
+ active_file:117 inactive_file:0 isolated_file:0
+ unevictable:0 dirty:0 writeback:0
+ slab_reclaimable:2617 slab_unreclaimable:4467
+ mapped:617 shmem:228 pagetables:1172
+Node 0 DMA32 free:4096kB min:4096kB low:5120kB high:6144kB
+Node 0 Normal free:10240kB min:8192kB low:10240kB high:12288kB
+CR2: ffff888102a4e000
 ---[ end trace 0000000000000000 ]---
 Kernel panic - not syncing: Fatal exception

@@ -802,7 +802,7 @@ def _compute_expert_rule_score(
         return 0.95  # 完全匹配
     elif patch_bug_type and crash_bug_type:
         # 宽松匹配：bug_type 之间存在别名关系
-        from ....common.taxonomy import BUG_TYPE_ALIASES, normalize_bug_type
+        from ...common.taxonomy import BUG_TYPE_ALIASES, normalize_bug_type
         try:
             crash_normalized = normalize_bug_type(crash_bug_type)
             patch_normalized = normalize_bug_type(patch_bug_type)

@@ -1,36 +1,47 @@
-BUG: unable to handle kernel NULL pointer dereference at 0000000000000008
-IP: [<ffffffffc0234a10>] my_driver_probe+0x30/0x120 [target_module]
-PGD 0
-Oops: 0000 [#1] SMP NOPTI
-CPU: 1 PID: 3456 Comm: systemd-udevd Not tainted 6.1.0-15-amd64 #1 Debian 6.1.66-1
-Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
-task: ffff999b84a10000 task.stack: ffffb4d2c0d2c000
-RIP: 0010:my_driver_probe+0x30/0x120 [target_module]
-RSP: 0018:ffffb4d2c0d2fc38 EFLAGS: 00010246
-RAX: 0000000000000000 RBX: ffff999b84a20000 RCX: 0000000000000000
-RDX: 0000000000000000 RSI: ffff999b84a20000 RDI: ffff999b84a20010
-RBP: ffffb4d2c0d2fc70 R08: 0000000000000000 R09: 0000000000000000
-R10: 0000000000000000 R11: 0000000000000000 R12: ffff999b84a20018
-R13: 0000000000000000 R14: ffffffffc0235000 R15: 0000000000000000
-FS:  00007f8a4c3e3880(0000) GS:ffff999b8fd00000(0000) knlGS:0000000000000000
-CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
-CR2: 0000000000000008 CR3: 0000000102a4e000 CR4: 0000000000350ee0
-Call Trace:
- <TASK>
- really_probe+0x1a5/0x3c0
- __driver_probe_device+0x88/0x160
- driver_probe_device+0x23/0xa0
- __driver_attach+0xc8/0x130
- bus_for_each_dev+0x7c/0xd0
- bus_add_driver+0x113/0x200
- driver_register+0x7b/0xe0
- do_one_initcall+0x46/0x1f0
- do_init_module+0x4b/0x210
- load_module+0x1a8e/0x1c10
- __do_sys_finit_module+0xaf/0x120
- do_syscall_64+0x5c/0xc0
- entry_SYSCALL_64_after_hwframe+0x44/0xae
- </TASK>
-CR2: 0000000000000008
----[ end trace 0000000000000000 ]---
-Kernel panic - not syncing: Fatal exception
+[  123.456001] BUG: unable to handle kernel NULL pointer dereference at 0000000000000028
+[  123.456002] IP: [<ffffffffc0234a10>] netdev_rx_handler+0x45/0x200 [network_driver]
+[  123.456003] PGD 0 P4D 0
+[  123.456004] Oops: 0000 [#1] SMP NOPTI
+[  123.456005] CPU: 1 PID: 3456 Comm: systemd-udevd Not tainted 6.8.0-rc1 #1
+[  123.456006] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+[  123.456007] task: ffff999b84a10000 task.stack: ffffb4d2c0d2c000
+[  123.456008] RIP: 0010:netdev_rx_handler+0x45/0x200 [network_driver]
+[  123.456009] RSP: 0018:ffffb4d2c0d2fc38 EFLAGS: 00010246
+[  123.456010] RAX: 0000000000000000 RBX: ffff999b84a20000 RCX: 0000000000000000
+[  123.456011] RDX: 0000000000000000 RSI: ffff999b84a20000 RDI: ffff999b84a20010
+[  123.456012] RBP: ffffb4d2c0d2fc70 R08: 0000000000000000 R09: 0000000000000000
+[  123.456013] R10: 0000000000000000 R11: 0000000000000000 R12: ffff999b84a20018
+[  123.456014] R13: 0000000000000000 R14: ffffffffc0235000 R15: 0000000000000000
+[  123.456015] FS:  00007f8a4c3e3880(0000) GS:ffff999b8fd00000(0000) knlGS:0000000000000000
+[  123.456016] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  123.456017] CR2: 0000000000000028 CR3: 0000000102a4e000 CR4: 0000000000350ee0
+[  123.456018] Modules linked in: network_driver(O+) nf_conntrack nfnetlink bridge stp llc
+[  123.456800] Call Trace:
+[  123.456801]  <TASK>
+[  123.456802]  netdev_rx_handler+0x45/0x200
+[  123.456803]  netif_receive_skb_internal+0x321/0x600
+[  123.456804]  napi_gro_receive+0x89/0x100
+[  123.456805]  __napi_poll+0x30/0x1a0
+[  123.456806]  net_rx_action+0x1a4/0x2e0
+[  123.456807]  __do_softirq+0xd4/0x2f6
+[  123.456808]  irq_exit_rcu+0x94/0xb0
+[  123.456809]  common_interrupt+0x86/0xa0
+[  123.456810]  </TASK>
+[  123.456811]  <TASK>
+[  123.456812]  really_probe+0x1a5/0x3c0
+[  123.456813]  __driver_probe_device+0x88/0x160
+[  123.456814]  driver_probe_device+0x23/0xa0
+[  123.456815]  __driver_attach+0xc8/0x130
+[  123.456816]  bus_for_each_dev+0x7c/0xd0
+[  123.456817]  bus_add_driver+0x113/0x200
+[  123.456818]  driver_register+0x7b/0xe0
+[  123.456819]  do_one_initcall+0x46/0x1f0
+[  123.456820]  do_init_module+0x4b/0x210
+[  123.456821]  load_module+0x1a8e/0x1c10
+[  123.456822]  __do_sys_finit_module+0xaf/0x120
+[  123.456823]  do_syscall_64+0x5c/0xc0
+[  123.456824]  entry_SYSCALL_64_after_hwframe+0x44/0xae
+[  123.456825]  </TASK>
+[  123.456826] CR2: 0000000000000028
+[  123.456827] ---[ end trace 0000000000000000 ]---
+[  123.456828] Kernel panic - not syncing: Fatal exception

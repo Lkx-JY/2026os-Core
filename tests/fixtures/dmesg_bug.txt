@@ -1,0 +1,17 @@
+[ 123.456789] BUG: kernel NULL pointer dereference, address: 0000000000000028
+[ 123.456790] #PF: supervisor read access in kernel mode
+[ 123.456791] #PF: error_code(0x0000) - not-present page
+[ 123.456792] PGD 0 P4D 0
+[ 123.456793] Oops: 0000 [#1] PREEMPT SMP NOPTI
+[ 123.456794] CPU: 2 PID: 1234 Comm: test_task Tainted: G        W         6.8.0-rc1+ #1
+[ 123.456795] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996)
+[ 123.456796] RIP: 0010:netdev_rx_handler+0x45/0x200
+[ 123.456797] RSP: 0018:ffffc90001234578 EFLAGS: 00010246
+[ 123.456798] RAX: 0000000000000000 RBX: ffff8880abcd1234 RCX: 0000000000000001
+[ 123.456799] RDX: 0000000000000000 RSI: ffff8880deadbeef RDI: ffff888012345678
+[ 123.456800] Call Trace:
+[ 123.456801]  <TASK>
+[ 123.456802]  netdev_rx_handler+0x45/0x200
+[ 123.456803]  netif_receive_skb_internal+0x321/0x600
+[ 123.456804]  napi_gro_receive+0x89/0x100
+[ 123.456805]  <TASK>
