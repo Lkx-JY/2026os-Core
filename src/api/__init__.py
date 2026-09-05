@@ -31,13 +31,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ★ 日志系统必须先初始化，否则后续 logger.info() 不会写入日志文件
     setup_logging(
         log_dir="logs",
-        app_name="project3136859-388917",
+        app_name="Linux 内核宕机自动诊断与补丁匹配系统",
         console_level="INFO",
         file_level="DEBUG",
     )
 
     logger.info("=" * 60)
-    logger.info("project3136859-388917 API Server Starting...")
+    logger.info("Linux 内核宕机自动诊断与补丁匹配系统 API Server Starting...")
     logger.info("Loading configuration...")
     config = load_config()
     logger.info(f"Embedding model: {config.get('model', {}).get('embedding', 'N/A')}")
@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield  # 应用运行中...
 
     # ── 关闭 ────────────────────────────────────────
-    logger.info("project3136859-388917 API Server shutting down...")
+    logger.info("Linux 内核宕机自动诊断与补丁匹配系统 API Server shutting down...")
 
 
 def _check_free_model_on_startup():
@@ -166,7 +166,7 @@ def create_app() -> FastAPI:
     - 健康检查
     """
     app = FastAPI(
-        title="project3136859-388917 — Kernel Crash Patch Matching",
+        title="Linux 内核宕机自动诊断与补丁匹配系统 — Kernel Crash Patch Matching",
         description="""
 ## 操作系统宕机 Upstream Patch 智能匹配系统
 
@@ -204,7 +204,7 @@ def create_app() -> FastAPI:
         import psutil
         return {
             "status": "healthy",
-            "service": "project3136859-388917 API",
+            "service": "Linux 内核宕机自动诊断与补丁匹配系统 API",
             "version": "1.0.0",
             "uptime_seconds": round(time.time() - _START_TIME, 2),
             "memory_mb": round(psutil.Process().memory_info().rss / (1024 * 1024), 2),
@@ -214,7 +214,7 @@ def create_app() -> FastAPI:
     async def root():
         """根路径 — API 导航"""
         return {
-            "service": "project3136859-388917 — Kernel Crash Patch Matching",
+            "service": "Linux 内核宕机自动诊断与补丁匹配系统 — Kernel Crash Patch Matching",
             "version": "1.0.0",
             "docs": "/api/docs",
             "endpoints": {

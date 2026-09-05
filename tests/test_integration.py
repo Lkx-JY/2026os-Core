@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-project3136859-388917 — 本地功能集成测试脚本
+Linux 内核宕机自动诊断与补丁匹配系统 — 本地功能集成测试脚本
 
 运行方式:
    source venv/bin/activate
@@ -488,7 +488,7 @@ def test_retrieval_pipeline():
 def main():
     print("""
 ╔══════════════════════════════════════════════════════════╗
-║     project3136859-388917 — 本地功能集成测试              ║
+║     Linux 内核宕机自动诊断与补丁匹配系统 — 本地功能集成测试              ║
 ║     Kernel Crash → Patch Matching System                 ║
 ╚══════════════════════════════════════════════════════════╝
 """)

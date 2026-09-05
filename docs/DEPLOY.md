@@ -1,4 +1,4 @@
-# project3136859-388917 部署文档
+# Linux 内核宕机自动诊断与补丁匹配系统 部署文档
 
 > Linux Kernel Crash → Root Cause → Patch Matching System
 
@@ -180,7 +180,7 @@ curl http://localhost:8000/health
 ```json
 {
   "status": "healthy",
-  "service": "project3136859-388917 API",
+  "service": "Linux 内核宕机自动诊断与补丁匹配系统 API",
   "version": "1.0.0",
   "uptime_seconds": 12.3,
   "memory_mb": 452.1

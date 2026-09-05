@@ -1,4 +1,4 @@
-"""project3136859-388917 — 启动脚本
+"""Linux 内核宕机自动诊断与补丁匹配系统 — 启动脚本
 
 Usage:
     python -m src.main                    # 开发模式启动
@@ -30,7 +30,7 @@ def main():
 
     print(f"""
 ╔══════════════════════════════════════════════════════════╗
-║        project3136859-388917 — API Server               ║
+║        Linux 内核宕机自动诊断与补丁匹配系统 — API Server               ║
 ║        Kernel Crash → Patch Matching System             ║
 ╠══════════════════════════════════════════════════════════╣
 ║  API Docs:  http://{host}:{port}/api/docs              ║

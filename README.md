@@ -1,4 +1,4 @@
-# project3136859-388917
+# Linux 内核宕机自动诊断与补丁匹配系统
 
 > **Linux Kernel Crash → Root Cause → Patch Matching System**
 >
@@ -43,7 +43,7 @@ Linux 内核宕机（Kernel Crash）是云计算和数据中心运维的核心�
 
 ### 解决方案
 
-project3136859-388917 构建了 **四阶段检索增强生成 (RAG) 流水线**：
+Linux 内核宕机自动诊断与补丁匹配系统 构建了 **四阶段检索增强生成 (RAG) 流水线**：
 
 ```text
 宕机日志 (dmesg/vmcore)

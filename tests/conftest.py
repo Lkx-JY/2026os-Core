@@ -1,4 +1,4 @@
-"""Pytest fixtures and shared configuration for project3136859-388917 tests."""
+"""Pytest fixtures and shared configuration for Linux 内核宕机自动诊断与补丁匹配系统 tests."""
 
 import os
 import sys
